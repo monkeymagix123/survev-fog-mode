@@ -64,6 +64,9 @@ export function getConfig(isProduction: boolean, dir: string) {
         cachingEnabled: false,
         rateLimitsEnabled: isProduction,
         uniqueInGameNames: true,
+        visibility: {
+            hideObjectsBehindOpaqueObstacles: false,
+        },
         debug: {
             spawnMode: "default",
             allowBots: isDev,

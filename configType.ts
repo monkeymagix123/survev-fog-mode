@@ -357,6 +357,18 @@ export interface ConfigType {
     uniqueInGameNames: boolean;
 
     /**
+     * Visibility rules that the server enforces for every client.
+     */
+    visibility: {
+        /**
+         * When enabled, clients stop receiving objects that are behind opaque map obstacles.
+         *
+         * Transparent blockers such as windows and glass walls are ignored so players can still see through them.
+         */
+        hideObjectsBehindOpaqueObstacles: boolean;
+    };
+
+    /**
      * Debugging config for development :)
      * All the boolean ones default to false on production and true otherwise.
      */

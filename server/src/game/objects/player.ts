@@ -22,7 +22,7 @@ import type { RoleDef } from "../../../../shared/defs/gameObjects/roleDefs";
 import type { ThrowableDef } from "../../../../shared/defs/gameObjects/throwableDefs";
 import { UnlockDefs } from "../../../../shared/defs/gameObjects/unlockDefs";
 import { MapObjectDefs } from "../../../../shared/defs/mapObjectDefs";
-import type { StructureDef } from "../../../../shared/defs/mapObjectsTyping";
+import type { ObstacleDef, StructureDef } from "../../../../shared/defs/mapObjectsTyping";
 import {
     type Action,
     type Anim,
@@ -86,6 +86,8 @@ const boostHeals: Array<{ maxBoost: number; heal: number }> = [];
         });
     }
 }
+
+const OCCLUSION_ALPHA_THRESHOLD = 0.95;
 
 export class PlayerBarn {
     players: Player[] = [];
@@ -2457,6 +2459,87 @@ export class Player extends BaseGameObject {
     visibleObjects = new Set<GameObject>();
     visibleMapIndicators = new Set<MapIndicator>();
 
+    private _isOpaqueVisionBlocker(viewerLayer: number, obj: GameObject): obj is Obstacle {
+        if (obj.__type !== ObjectType.Obstacle) {
+            return false;
+        }
+
+        if (obj.dead || !obj.collidable || obj.isSkin) {
+            return false;
+        }
+
+        if (!util.sameLayer(viewerLayer, obj.layer)) {
+            return false;
+        }
+
+        const def = MapObjectDefs[obj.type] as ObstacleDef;
+        const alpha = def.img.alpha ?? 1;
+
+        return (
+            !obj.isWindow &&
+            !def.isBush &&
+            def.material !== "glass" &&
+            obj.height > 0.25 &&
+            alpha >= OCCLUSION_ALPHA_THRESHOLD
+        );
+    }
+
+    private _supportsOpaqueOcclusion(obj: GameObject) {
+        return obj.__type !== ObjectType.Building && obj.__type !== ObjectType.Structure;
+    }
+
+    private _isOccludedByOpaqueObstacle(viewer: Player, target: GameObject) {
+        if (!this._supportsOpaqueOcclusion(target)) {
+            return false;
+        }
+
+        const targetDistSq = v2.lengthSqr(v2.sub(target.pos, viewer.pos));
+        if (targetDistSq < 0.0001) {
+            return false;
+        }
+
+        const blockers = this.game.grid.intersectLineSegment(viewer.pos, target.pos);
+        for (let i = 0; i < blockers.length; i++) {
+            const blocker = blockers[i];
+            if (blocker === target || !this._isOpaqueVisionBlocker(viewer.layer, blocker)) {
+                continue;
+            }
+
+            // Avoid having nearby/touching blockers hide everything while the player is right up against them.
+            if (collider.intersectCircle(blocker.collider, viewer.pos, 0.05)) {
+                continue;
+            }
+
+            const intersection = collider.intersectSegment(blocker.collider, viewer.pos, target.pos);
+            if (!intersection) {
+                continue;
+            }
+
+            const blockerDistSq = v2.lengthSqr(v2.sub(intersection.point, viewer.pos));
+            if (blockerDistSq + 0.0001 < targetDistSq) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private _filterOccludedVisibleObjects(viewer: Player, objects: Set<GameObject>) {
+        const filteredObjects = new Set<GameObject>();
+
+        for (const obj of objects) {
+            if (
+                obj === this ||
+                obj === viewer ||
+                !this._isOccludedByOpaqueObstacle(viewer, obj)
+            ) {
+                filteredObjects.add(obj);
+            }
+        }
+
+        return filteredObjects;
+    }
+
     msgStream = new net.MsgStream(new ArrayBuffer(65536));
     sendMsgs(): void {
         const msgStream = this.msgStream;
@@ -2532,11 +2615,15 @@ export class Player extends BaseGameObject {
         }
         const rect = collider.createAabbExtents(player.pos, v2.create(width, height));
 
-        const newVisibleObjects = game.grid.intersectColliderSet(rect);
+        let newVisibleObjects = game.grid.intersectColliderSet(rect);
         // client crashes if active player is not visible
         // so make sure its always added to visible objects
         newVisibleObjects.add(this);
         newVisibleObjects.add(player);
+
+        if (Config.visibility.hideObjectsBehindOpaqueObstacles) {
+            newVisibleObjects = this._filterOccludedVisibleObjects(player, newVisibleObjects);
+        }
 
         for (const obj of this.visibleObjects) {
             if (!newVisibleObjects.has(obj)) {
