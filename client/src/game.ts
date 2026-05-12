@@ -58,10 +58,10 @@ export interface Ctx {
 }
 
 export interface FogVisibilitySettings {
-    ambientDarkness: number;
-    lightStrength: number;
-    lightFalloff: number;
-    lightFalloffStart: number;
+    ambientDarkness: number; // A (0 = no ambient darkness, 1 = fully dark world)
+    lightStrength: number;   // S (0–1+ typical)
+    lightFalloff: number;    // N (2–4 feels natural)
+    lightRadius: number;     // R (world units)
     enableShadows: boolean;
 }
 
@@ -118,12 +118,11 @@ export class Game {
     m_targetZoom!: number;
     m_debugZoom!: number;
     m_useDebugZoom!: boolean;
-    m_obstacleOcclusionOverlay = false;
     m_fogVisibilitySettings: FogVisibilitySettings = {
-        ambientDarkness: 1,
+        ambientDarkness: 0.9,
         lightStrength: 1.15,
         lightFalloff: 2,
-        lightFalloffStart: 4,
+        lightRadius: 10,
         enableShadows: true,
     };
 

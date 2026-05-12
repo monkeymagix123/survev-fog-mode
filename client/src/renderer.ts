@@ -14,13 +14,10 @@ import type { Map } from "./map";
 import type { Building } from "./objects/building";
 import type { Obstacle } from "./objects/obstacle";
 
-//
-// Helpers
-//
 function step(cur: number, target: number, rate: number) {
     const delta = target - cur;
-    const step = delta * rate;
-    return Math.abs(step) < 0.01 ? delta : step;
+    const s = delta * rate;
+    return Math.abs(s) < 0.01 ? delta : s;
 }
 
 function createLayerMask() {
@@ -42,18 +39,16 @@ function drawRect(gfx: PIXI.Graphics, x: number, y: number, w: number, h: number
 }
 
 const OCCLUSION_ALPHA_THRESHOLD = 0.95;
-const OCCLUSION_OVERLAY_ALPHA = 0.90;
 const OCCLUSION_OVERLAY_COLOR = 0x060606;
-const OCCLUSION_BASE_DIM_ALPHA = 0.75;
+const OCCLUSION_OVERLAY_ALPHA = 0.5;
 const OCCLUSION_VIEW_MARGIN = 96;
-const OCCLUSION_LIGHT_BAND_COUNT = 20;
-const OCCLUSION_LIGHT_MIN_ALPHA = 0.18;
-const OCCLUSION_LIGHT_RADIUS = 6;
-const OCCLUSION_MAX_EDGE_SAMPLES = 10;
-const OCCLUSION_MIN_EDGE_SAMPLES = 3;
-const FOG_VISIBILITY_MAP_SUFFIX = "_fog";
-const FOG_LIGHT_BAND_COUNT = 100;
-const FOG_LIGHT_VISIBILITY_EPSILON = 0.02;
+
+const FOG_LIGHT_BAND_COUNT = 50;
+
+interface Edge {
+    a: Vec2;
+    b: Vec2;
+}
 
 function getColliderCenter(col: Collider) {
     return col.type === collider.Type.Aabb
@@ -61,178 +56,75 @@ function getColliderCenter(col: Collider) {
         : col.pos;
 }
 
-function getAabbShadowEdgePoints(viewerPos: { x: number; y: number }, col: AABB) {
-    const center = getColliderCenter(col);
-    const dir = v2.normalizeSafe(v2.sub(center, viewerPos), v2.create(1, 0));
+function circleToShadowEdge(viewerPos: Vec2, pos: Vec2, rad: number): Edge {
+    const dir = v2.normalizeSafe(v2.sub(pos, viewerPos), v2.create(1, 0));
     const perp = v2.perp(dir);
-    const corners = [
-        v2.create(col.min.x, col.min.y),
-        v2.create(col.min.x, col.max.y),
-        v2.create(col.max.x, col.min.y),
-        v2.create(col.max.x, col.max.y),
-    ];
-
-    let left = corners[0];
-    let right = corners[0];
-    let leftProj = -Infinity;
-    let rightProj = Infinity;
-
-    for (let i = 0; i < corners.length; i++) {
-        const corner = corners[i];
-        const proj = v2.dot(v2.sub(corner, viewerPos), perp);
-        if (proj > leftProj) {
-            leftProj = proj;
-            left = corner;
-        }
-        if (proj < rightProj) {
-            rightProj = proj;
-            right = corner;
-        }
-    }
-
-    return [left, right] as const;
-}
-
-function getAabbVisibleEdgePath(viewerPos: { x: number; y: number }, col: AABB) {
-    const corners = [
-        v2.create(col.min.x, col.min.y),
-        v2.create(col.max.x, col.min.y),
-        v2.create(col.max.x, col.max.y),
-        v2.create(col.min.x, col.max.y),
-    ];
-    const [left, right] = getAabbShadowEdgePoints(viewerPos, col);
-    const leftIdx = corners.findIndex((corner) => v2.eq(corner, left));
-    const rightIdx = corners.findIndex((corner) => v2.eq(corner, right));
-    if (leftIdx < 0 || rightIdx < 0) {
-        return [left, right];
-    }
-
-    const forwardPath = [corners[leftIdx]];
-    for (let idx = leftIdx; idx !== rightIdx; idx = (idx + 1) % corners.length) {
-        forwardPath.push(corners[(idx + 1) % corners.length]);
-    }
-
-    const backwardPath = [corners[leftIdx]];
-    for (
-        let idx = leftIdx;
-        idx !== rightIdx;
-        idx = (idx - 1 + corners.length) % corners.length
-    ) {
-        backwardPath.push(corners[(idx - 1 + corners.length) % corners.length]);
-    }
-
-    const pathScore = (path: Vec2[]) => {
-        let score = 0;
-        for (let i = 0; i < path.length; i++) {
-            score += v2.length(v2.sub(path[i], viewerPos));
-        }
-        return score / path.length;
+    return {
+        a: v2.add(pos, v2.mul(perp, rad)),
+        b: v2.sub(pos, v2.mul(perp, rad)),
     };
-
-    return pathScore(forwardPath) <= pathScore(backwardPath) ? forwardPath : backwardPath;
 }
 
-function samplePolyline(points: readonly Vec2[], sampleCount: number) {
-    if (points.length <= 1 || sampleCount <= points.length) {
-        return points.map((point) => v2.copy(point));
-    }
+function aabbToShadowEdges(viewerPos: Vec2, col: AABB): Edge[] {
+    const { min, max } = col;
 
-    let totalLen = 0;
-    const segLens: number[] = [];
-    for (let i = 1; i < points.length; i++) {
-        const segLen = v2.distance(points[i - 1], points[i]);
-        segLens.push(segLen);
-        totalLen += segLen;
-    }
+    // Four AABB edges with their outward normals (CCW winding → normal is left of b-a)
+    const candidates: Array<{ a: Vec2; b: Vec2; normal: Vec2 }> = [
+        // Bottom  (normal -Y)
+        { a: v2.create(max.x, min.y), b: v2.create(min.x, min.y), normal: v2.create(0, -1) },
+        // Left    (normal -X)
+        { a: v2.create(min.x, min.y), b: v2.create(min.x, max.y), normal: v2.create(-1, 0) },
+        // Top     (normal +Y)
+        { a: v2.create(min.x, max.y), b: v2.create(max.x, max.y), normal: v2.create(0, 1) },
+        // Right   (normal +X)
+        { a: v2.create(max.x, max.y), b: v2.create(max.x, min.y), normal: v2.create(1, 0) },
+    ];
 
-    if (totalLen <= 0.0001) {
-        return points.map((point) => v2.copy(point));
-    }
-
-    const samples: Vec2[] = [];
-    for (let i = 0; i < sampleCount; i++) {
-        const targetLen = (i / (sampleCount - 1)) * totalLen;
-        let walked = 0;
-
-        for (let j = 0; j < segLens.length; j++) {
-            const segLen = segLens[j];
-            if (walked + segLen >= targetLen || j === segLens.length - 1) {
-                const localT = segLen > 0.0001 ? (targetLen - walked) / segLen : 0;
-                samples.push(v2.lerp(localT, points[j], points[j + 1]));
-                break;
-            }
-            walked += segLen;
+    const facing: Edge[] = [];
+    for (const edge of candidates) {
+        const mid = v2.mul(v2.add(edge.a, edge.b), 0.5);
+        const toViewer = v2.sub(viewerPos, mid);
+        if (v2.dot(edge.normal, toViewer) > 0) {
+            facing.push({ a: edge.a, b: edge.b });
         }
     }
-
-    return samples;
+    return facing;
 }
 
-function getObstacleShadowEdgePoints(viewerPos: { x: number; y: number }, obstacle: Obstacle) {
+function obstacleToShadowEdges(viewerPos: Vec2, obstacle: Obstacle): Edge[] {
     const col = obstacle.collider;
     if (col.type === collider.Type.Aabb) {
-        return getAabbShadowEdgePoints(viewerPos, col);
+        return aabbToShadowEdges(viewerPos, col);
     }
-
-    const dir = v2.normalizeSafe(v2.sub(col.pos, viewerPos), v2.create(1, 0));
-    const perp = v2.perp(dir);
-    return [
-        v2.add(col.pos, v2.mul(perp, col.rad)),
-        v2.sub(col.pos, v2.mul(perp, col.rad)),
-    ] as const;
+    return [circleToShadowEdge(viewerPos, col.pos, col.rad)];
 }
 
-function getObstacleShadowEdgeSamples(
-    viewerPos: { x: number; y: number },
-    obstacle: Obstacle,
-    sampleCount: number,
-) {
-    const col = obstacle.collider;
-    if (col.type === collider.Type.Aabb) {
-        return samplePolyline(getAabbVisibleEdgePath(viewerPos, col), sampleCount);
-    }
-
-    const [left, right] = getObstacleShadowEdgePoints(viewerPos, obstacle);
-    return samplePolyline([left, right], sampleCount);
-}
-
-function getScreenShadowStrip(
+function drawEdgeShadow(
+    overlay: PIXI.Graphics,
     camera: Camera,
     viewerPos: Vec2,
-    edgePoints: readonly Vec2[],
+    edge: Edge,
     shadowLen: number,
-    startDist: number,
-    endDist: number,
-) {
+): void {
     const viewerScreen = camera.m_pointToScreen(viewerPos);
-    const near: Vec2[] = [];
-    const far: Vec2[] = [];
+    const aScreen = camera.m_pointToScreen(edge.a);
+    const bScreen = camera.m_pointToScreen(edge.b);
 
-    for (let i = 0; i < edgePoints.length; i++) {
-        const screen = camera.m_pointToScreen(edgePoints[i]);
-        const dir = v2.sub(screen, viewerScreen);
-        const edgeDist = v2.length(dir);
-        if (edgeDist < 0.0001) {
-            continue;
-        }
+    const dirA = v2.sub(aScreen, viewerScreen);
+    const dirB = v2.sub(bScreen, viewerScreen);
+    const lenA = v2.length(dirA);
+    const lenB = v2.length(dirB);
 
-        const normDir = v2.normalizeSafe(dir, v2.create(1, 0));
-        const maxDist = edgeDist + shadowLen;
-        const clampedStartDist = math.clamp(startDist, edgeDist, maxDist);
-        const clampedEndDist = math.clamp(endDist, edgeDist, maxDist);
-        if (clampedEndDist - clampedStartDist < 0.5) {
-            continue;
-        }
+    if (lenA < 0.0001 || lenB < 0.0001) return;
 
-        near.push(v2.add(viewerScreen, v2.mul(normDir, clampedStartDist)));
-        far.push(v2.add(viewerScreen, v2.mul(normDir, clampedEndDist)));
-    }
+    const farA = v2.add(aScreen, v2.mul(v2.div(dirA, lenA), shadowLen));
+    const farB = v2.add(bScreen, v2.mul(v2.div(dirB, lenB), shadowLen));
 
-    if (near.length < 2 || far.length < 2) {
-        return null;
-    }
-
-    return { near, far };
+    overlay.moveTo(aScreen.x, aScreen.y);
+    overlay.lineTo(bScreen.x, bScreen.y);
+    overlay.lineTo(farB.x, farB.y);
+    overlay.lineTo(farA.x, farA.y);
+    overlay.closePath();
 }
 
 export class Renderer {
@@ -277,10 +169,8 @@ export class Renderer {
         ) {
             return false;
         }
-
         const def = MapObjectDefs[obstacle.type] as ObstacleDef;
         const alpha = def.img.alpha ?? 1;
-
         return (
             !obstacle.isWindow &&
             !obstacle.isBush &&
@@ -308,192 +198,127 @@ export class Renderer {
         );
     }
 
-    private boundaryUsesBuildingWindow(
-        boundaryPoint: Vec2,
-        obstacle: Obstacle,
-    ) {
-        const boundaryTolerance = 1.5;
+    private boundaryUsesBuildingWindow(boundaryPoint: Vec2, obstacle: Obstacle) {
+        const tol = 1.5;
         if (obstacle.collider.type === collider.Type.Aabb) {
             return coldet.testPointAabb(
                 boundaryPoint,
-                v2.sub(obstacle.collider.min, v2.create(boundaryTolerance, boundaryTolerance)),
-                v2.add(obstacle.collider.max, v2.create(boundaryTolerance, boundaryTolerance)),
+                v2.sub(obstacle.collider.min, v2.create(tol, tol)),
+                v2.add(obstacle.collider.max, v2.create(tol, tol)),
             );
         }
-
-        const maxDist = obstacle.collider.rad + boundaryTolerance;
-        return v2.lengthSqr(v2.sub(boundaryPoint, obstacle.collider.pos)) <= maxDist * maxDist;
-    }
-
-    private getShadowSampleCount(camera: Camera, edge0: Vec2, edge1: Vec2) {
-        const screen0 = camera.m_pointToScreen(edge0);
-        const screen1 = camera.m_pointToScreen(edge1);
-        const span = v2.distance(screen0, screen1);
-        return math.clamp(
-            Math.round(span / 38),
-            OCCLUSION_MIN_EDGE_SAMPLES,
-            OCCLUSION_MAX_EDGE_SAMPLES,
-        );
-    }
-
-    private getLightAdjustedOcclusionAlpha(
-        bandIdx: number,
-    ) {
-        const bandT = (bandIdx + 1) / OCCLUSION_LIGHT_BAND_COUNT;
-        const eased = math.smoothstep(bandT, 0, 1);
-        return math.lerp(eased, OCCLUSION_LIGHT_MIN_ALPHA, OCCLUSION_OVERLAY_ALPHA);
-    }
-
-    private isFogVisibilityMap(map: Map) {
-        return map.mapName.endsWith(FOG_VISIBILITY_MAP_SUFFIX);
-    }
-
-    private getFogLightOuterRadius(settings: FogVisibilitySettings) {
-        const startRadius = Math.max(settings.lightFalloffStart, 0);
-        const strength = Math.max(settings.lightStrength, 0);
-        const falloff = Math.max(settings.lightFalloff, 0.01);
-
-        if (strength <= FOG_LIGHT_VISIBILITY_EPSILON) {
-            return startRadius;
-        }
-
+        const maxDist = obstacle.collider.rad + tol;
         return (
-            startRadius +
-            Math.max(
-                0,
-                Math.pow(strength / FOG_LIGHT_VISIBILITY_EPSILON, 1 / falloff) - 1,
-            )
+            v2.lengthSqr(v2.sub(boundaryPoint, obstacle.collider.pos)) <= maxDist * maxDist
         );
     }
 
-    private getFogDarknessAlpha(settings: FogVisibilitySettings, worldDist: number) {
-        const ambientDarkness = math.clamp(settings.ambientDarkness, 0, 1);
-        const strength = Math.max(settings.lightStrength, 0);
-        const falloff = Math.max(settings.lightFalloff, 0.01);
-        const startRadius = Math.max(settings.lightFalloffStart, 0);
-        const falloffDist = Math.max(0, worldDist - startRadius);
-        const visibility = strength / Math.pow(1 + falloffDist, falloff);
+   private drawFogLightOverlay(
+    overlay: PIXI.Graphics,
+    camera: Camera,
+    viewerPos: Vec2,
+    settings: FogVisibilitySettings,
+) {
+    const ambient = math.clamp(settings.ambientDarkness ?? 0, 0, 1);
+    const strength = settings.lightStrength ?? 1;
+    const falloff = settings.lightFalloff ?? 2;
+    const radius = Math.max(0.0001, settings.lightRadius ?? 100);
 
-        return ambientDarkness * (1 - math.clamp(visibility, 0, 1));
-    }
+    const center = camera.m_pointToScreen(viewerPos);
+    const radiusPx = camera.m_scaleToScreen(radius);
+    const bandCount = FOG_LIGHT_BAND_COUNT;
 
-    private drawCircleRing(
-        overlay: PIXI.Graphics,
-        center: Vec2,
-        innerRadius: number,
-        outerRadius: number,
-        alpha: number,
-    ) {
-        if (alpha <= 0.001 || outerRadius <= innerRadius + 0.5) {
-            return;
-        }
+    // Smoother light attenuation combining an exponential core and power falloff
+    const lightAt = (distance: number) => {
+        const x = distance / radius;
+        const core = Math.exp(-x * x * 6.0);
+        const fall = Math.pow(Math.max(0, 1 - x), falloff);
+        return strength * (core * 0.7 + fall * 0.3);
+    };
+
+    // Darkness function: light proportionally reduces the ambient fog
+    const getDarkness = (distance: number) => {
+        // We clamp the light at 1 max to prevent negative darkness artifacts
+        const light = math.clamp(lightAt(distance), 0, 1);
+        const reducedDarkness = ambient * (1 - light);
+        return math.clamp(reducedDarkness, 0, 1);
+    };
+
+    // ---- radial approximation ----
+    for (let i = 0; i < bandCount; i++) {
+        const innerT = i / bandCount;
+        const outerT = (i + 1) / bandCount;
+        const midT = (innerT + outerT) * 0.5;
+        
+        const d = midT * radius;
+        const darkness = getDarkness(d);
+        const alpha = darkness;
+
+        if (alpha <= 0.001) continue;
+
+        const innerR = innerT * radiusPx;
+        const outerR = outerT * radiusPx;
 
         overlay.beginFill(OCCLUSION_OVERLAY_COLOR, alpha);
-        overlay.drawCircle(center.x, center.y, outerRadius);
-        if (innerRadius > 0.5) {
+        overlay.drawCircle(center.x, center.y, outerR);
+        
+        if (innerR > 0.5) {
             overlay.beginHole();
-            overlay.drawCircle(center.x, center.y, innerRadius);
+            overlay.drawCircle(center.x, center.y, innerR);
             overlay.endHole();
         }
         overlay.endFill();
     }
 
-    private drawFogLightOverlay(
+    // ---- outside radius: pure ambient fog ----
+    overlay.beginFill(OCCLUSION_OVERLAY_COLOR, ambient);
+    overlay.drawRect(0, 0, camera.m_screenWidth, camera.m_screenHeight);
+    overlay.beginHole();
+    overlay.drawCircle(center.x, center.y, radiusPx);
+    overlay.endHole();
+    overlay.endFill();
+}
+
+    private drawObstacleShadows(
         overlay: PIXI.Graphics,
         camera: Camera,
         viewerPos: Vec2,
-        settings: FogVisibilitySettings,
-    ) {
-        const ambientDarkness = math.clamp(settings.ambientDarkness, 0, 1);
-        if (ambientDarkness <= 0) {
-            return;
+        shadowLen: number,
+        obstacle: Obstacle,
+    ): void {
+        const edges = obstacleToShadowEdges(viewerPos, obstacle);
+        if (edges.length === 0) return;
+
+        overlay.beginFill(OCCLUSION_OVERLAY_COLOR, OCCLUSION_OVERLAY_ALPHA);
+        for (const edge of edges) {
+            drawEdgeShadow(overlay, camera, viewerPos, edge, shadowLen);
         }
-
-        const center = camera.m_pointToScreen(viewerPos);
-        const outerWorldRadius = this.getFogLightOuterRadius(settings);
-        const outerScreenRadius = camera.m_scaleToScreen(outerWorldRadius);
-
-        if (outerScreenRadius <= 1) {
-            overlay.beginFill(OCCLUSION_OVERLAY_COLOR, ambientDarkness);
-            overlay.drawRect(0, 0, camera.m_screenWidth, camera.m_screenHeight);
-            overlay.endFill();
-            return;
-        }
-
-        for (let bandIdx = 0; bandIdx < FOG_LIGHT_BAND_COUNT; bandIdx++) {
-            const innerWorldRadius = (bandIdx / FOG_LIGHT_BAND_COUNT) * outerWorldRadius;
-            const outerWorldBandRadius =
-                ((bandIdx + 1) / FOG_LIGHT_BAND_COUNT) * outerWorldRadius;
-            const bandAlpha = this.getFogDarknessAlpha(
-                settings,
-                (innerWorldRadius + outerWorldBandRadius) * 0.5,
-            );
-
-            this.drawCircleRing(
-                overlay,
-                center,
-                camera.m_scaleToScreen(innerWorldRadius),
-                camera.m_scaleToScreen(outerWorldBandRadius),
-                bandAlpha,
-            );
-        }
-
-        overlay.beginFill(OCCLUSION_OVERLAY_COLOR, ambientDarkness);
-        overlay.drawRect(0, 0, camera.m_screenWidth, camera.m_screenHeight);
-        overlay.beginHole();
-        overlay.drawCircle(center.x, center.y, outerScreenRadius);
-        overlay.endHole();
         overlay.endFill();
     }
 
-    private getShadowMaxDist(
-        camera: Camera,
-        viewerPos: Vec2,
-        edgePoints: readonly Vec2[],
-        shadowLen: number,
-    ) {
-        const viewerScreen = camera.m_pointToScreen(viewerPos);
-        let maxEdgeDist = 0;
-
-        for (let i = 0; i < edgePoints.length; i++) {
-            maxEdgeDist = Math.max(
-                maxEdgeDist,
-                v2.distance(camera.m_pointToScreen(edgePoints[i]), viewerScreen),
-            );
-        }
-
-        return maxEdgeDist + shadowLen;
-    }
-
-    private drawShadowBand(
+    private drawBuildingZoomShadow(
         overlay: PIXI.Graphics,
         camera: Camera,
         viewerPos: Vec2,
-        edgePoints: readonly Vec2[],
         shadowLen: number,
-        startDist: number,
-        endDist: number,
-    ) {
-        const strip = getScreenShadowStrip(
-            camera,
-            viewerPos,
-            edgePoints,
-            shadowLen,
-            startDist,
-            endDist,
-        );
-        if (!strip) {
-            return;
-        }
+        zoomIn: AABB,
+        windowEdges: Edge[],
+    ): void {
+        const edges = aabbToShadowEdges(viewerPos, zoomIn);
+        if (edges.length === 0) return;
 
-        overlay.moveTo(strip.near[0].x, strip.near[0].y);
-        for (let i = 1; i < strip.near.length; i++) {
-            overlay.lineTo(strip.near[i].x, strip.near[i].y);
+        overlay.beginFill(OCCLUSION_OVERLAY_COLOR, OCCLUSION_OVERLAY_ALPHA);
+        for (const edge of edges) {
+            drawEdgeShadow(overlay, camera, viewerPos, edge, shadowLen);
         }
-        for (let i = strip.far.length - 1; i >= 0; i--) {
-            overlay.lineTo(strip.far[i].x, strip.far[i].y);
+        if (windowEdges.length > 0) {
+            overlay.beginHole();
+            for (const edge of windowEdges) {
+                drawEdgeShadow(overlay, camera, viewerPos, edge, shadowLen);
+            }
+            overlay.endHole();
         }
-        overlay.closePath();
+        overlay.endFill();
     }
 
     private redrawVisionOverlay(camera: Camera, map: Map) {
@@ -501,24 +326,24 @@ export class Renderer {
         overlay.clear();
 
         const gameLike = this.game as {
-            m_activePlayer?: {
-                layer: number;
-            };
+            m_activePlayer?: { layer: number };
             m_obstacleOcclusionOverlay?: boolean;
             m_fogVisibilitySettings?: FogVisibilitySettings;
         };
 
         const activePlayer = gameLike.m_activePlayer;
-        const fogModeEnabled = this.isFogVisibilityMap(map);
-        const fogSettings = gameLike.m_fogVisibilitySettings ?? {
+        const fogModeEnabled = !!gameLike.m_fogVisibilitySettings;
+        const fogSettings: FogVisibilitySettings = gameLike.m_fogVisibilitySettings ?? {
             ambientDarkness: 1,
             lightStrength: 1.15,
             lightFalloff: 2,
-            lightFalloffStart: 4,
+            lightRadius: 100,
             enableShadows: true,
         };
+
         const shadowsEnabled =
-            !!gameLike.m_obstacleOcclusionOverlay || (fogModeEnabled && fogSettings.enableShadows);
+            !!gameLike.m_obstacleOcclusionOverlay ||
+            (fogModeEnabled && fogSettings.enableShadows);
 
         if ((!shadowsEnabled && !fogModeEnabled) || !activePlayer || !map.mapLoaded) {
             overlay.visible = false;
@@ -527,36 +352,25 @@ export class Renderer {
 
         overlay.visible = true;
 
-        if (fogModeEnabled) {
-            this.drawFogLightOverlay(overlay, camera, camera.m_pos, fogSettings);
-        } else if (OCCLUSION_BASE_DIM_ALPHA > 0) {
-            overlay.beginFill(OCCLUSION_OVERLAY_COLOR, OCCLUSION_BASE_DIM_ALPHA);
-            overlay.drawRect(0, 0, camera.m_screenWidth, camera.m_screenHeight);
-            overlay.endFill();
-        }
+        // if (fogModeEnabled) {
+        //     this.drawFogLightOverlay(overlay, camera, camera.m_pos, fogSettings);
+        // }
 
-        if (!shadowsEnabled) {
-            return;
-        }
+        if (!shadowsEnabled) return;
 
         const viewerPos = camera.m_pos;
         const shadowLen =
-            Math.hypot(camera.m_screenWidth, camera.m_screenHeight) + OCCLUSION_VIEW_MARGIN * 2;
+            Math.hypot(camera.m_screenWidth, camera.m_screenHeight) +
+            OCCLUSION_VIEW_MARGIN * 2;
+
         const obstacles = map.m_obstaclePool.m_getPool();
         const buildings = map.m_buildingPool.m_getPool();
-        const shadowLightRadius = fogModeEnabled
-            ? 0
-            : camera.m_scaleToScreen(OCCLUSION_LIGHT_RADIUS);
 
+        // --- Obstacle shadows -------------------------------------------------
         for (let i = 0; i < obstacles.length; i++) {
             const obstacle = obstacles[i];
-            if (!this.isOpaqueVisionBlocker(activePlayer.layer, obstacle)) {
-                continue;
-            }
-
-            if (collider.intersectCircle(obstacle.collider, viewerPos, 0.05)) {
-                continue;
-            }
+            if (!this.isOpaqueVisionBlocker(activePlayer.layer, obstacle)) continue;
+            if (collider.intersectCircle(obstacle.collider, viewerPos, 0.05)) continue;
 
             const centerScreen = camera.m_pointToScreen(getColliderCenter(obstacle.collider));
             if (
@@ -568,70 +382,18 @@ export class Renderer {
                 continue;
             }
 
-            const [leftWorld, rightWorld] = getObstacleShadowEdgePoints(viewerPos, obstacle);
-            const edgeSamples = getObstacleShadowEdgeSamples(
-                viewerPos,
-                obstacle,
-                this.getShadowSampleCount(camera, leftWorld, rightWorld),
-            );
-            const maxShadowDist = this.getShadowMaxDist(
-                camera,
-                viewerPos,
-                edgeSamples,
-                shadowLen,
-            );
-
-            if (shadowLightRadius > 0) {
-                for (let bandIdx = 0; bandIdx < OCCLUSION_LIGHT_BAND_COUNT; bandIdx++) {
-                    const startDist =
-                        (bandIdx / OCCLUSION_LIGHT_BAND_COUNT) * shadowLightRadius;
-                    const endDist =
-                        ((bandIdx + 1) / OCCLUSION_LIGHT_BAND_COUNT) * shadowLightRadius;
-                    overlay.beginFill(
-                        OCCLUSION_OVERLAY_COLOR,
-                        this.getLightAdjustedOcclusionAlpha(bandIdx),
-                    );
-                    this.drawShadowBand(
-                        overlay,
-                        camera,
-                        viewerPos,
-                        edgeSamples,
-                        shadowLen,
-                        startDist,
-                        endDist,
-                    );
-                    overlay.endFill();
-                }
-            }
-
-            overlay.beginFill(OCCLUSION_OVERLAY_COLOR, OCCLUSION_OVERLAY_ALPHA);
-            this.drawShadowBand(
-                overlay,
-                camera,
-                viewerPos,
-                edgeSamples,
-                shadowLen,
-                shadowLightRadius,
-                maxShadowDist,
-            );
-            overlay.endFill();
+            this.drawObstacleShadows(overlay, camera, viewerPos, shadowLen, obstacle);
         }
 
+        // --- Building shadows -------------------------------------------------
         for (let i = 0; i < buildings.length; i++) {
             const building = buildings[i];
-            if (!this.isBuildingVisionBlocker(activePlayer.layer, building)) {
-                continue;
-            }
+            if (!this.isBuildingVisionBlocker(activePlayer.layer, building)) continue;
 
             for (let j = 0; j < building.ceiling.zoomRegions.length; j++) {
                 const zoomIn = building.ceiling.zoomRegions[j].zoomIn;
-                if (!zoomIn || zoomIn.type !== collider.Type.Aabb) {
-                    continue;
-                }
-
-                if (coldet.testPointAabb(viewerPos, zoomIn.min, zoomIn.max)) {
-                    continue;
-                }
+                if (!zoomIn || zoomIn.type !== collider.Type.Aabb) continue;
+                if (coldet.testPointAabb(viewerPos, zoomIn.min, zoomIn.max)) continue;
 
                 const centerScreen = camera.m_pointToScreen(getColliderCenter(zoomIn));
                 if (
@@ -643,19 +405,8 @@ export class Renderer {
                     continue;
                 }
 
-                const [leftWorld, rightWorld] = getAabbShadowEdgePoints(viewerPos, zoomIn);
-                const buildingEdgeSamples = samplePolyline(
-                    getAabbVisibleEdgePath(viewerPos, zoomIn),
-                    this.getShadowSampleCount(camera, leftWorld, rightWorld),
-                );
-                const windowEdgeSamples: Vec2[][] = [];
-                const maxShadowDist = this.getShadowMaxDist(
-                    camera,
-                    viewerPos,
-                    buildingEdgeSamples,
-                    shadowLen,
-                );
-
+                // Gather window opening edges that punch through this boundary
+                const windowEdges: Edge[] = [];
                 for (let k = 0; k < obstacles.length; k++) {
                     const obstacle = obstacles[k];
                     if (
@@ -673,11 +424,7 @@ export class Renderer {
                             8,
                         ),
                     );
-                    const boundaryHit = collider.intersectSegment(
-                        zoomIn,
-                        viewerPos,
-                        windowProbe,
-                    );
+                    const boundaryHit = collider.intersectSegment(zoomIn, viewerPos, windowProbe);
                     if (
                         !boundaryHit ||
                         !this.boundaryUsesBuildingWindow(boundaryHit.point, obstacle)
@@ -685,84 +432,19 @@ export class Renderer {
                         continue;
                     }
 
-                    const [windowLeft, windowRight] = getObstacleShadowEdgePoints(
-                        viewerPos,
-                        obstacle,
-                    );
-                    windowEdgeSamples.push(
-                        getObstacleShadowEdgeSamples(
-                            viewerPos,
-                            obstacle,
-                            this.getShadowSampleCount(camera, windowLeft, windowRight),
-                        ),
-                    );
-                }
-
-                if (shadowLightRadius > 0) {
-                    for (let bandIdx = 0; bandIdx < OCCLUSION_LIGHT_BAND_COUNT; bandIdx++) {
-                        const startDist =
-                            (bandIdx / OCCLUSION_LIGHT_BAND_COUNT) * shadowLightRadius;
-                        const endDist =
-                            ((bandIdx + 1) / OCCLUSION_LIGHT_BAND_COUNT) * shadowLightRadius;
-
-                        overlay.beginFill(
-                            OCCLUSION_OVERLAY_COLOR,
-                            this.getLightAdjustedOcclusionAlpha(bandIdx),
-                        );
-                        this.drawShadowBand(
-                            overlay,
-                            camera,
-                            viewerPos,
-                            buildingEdgeSamples,
-                            shadowLen,
-                            startDist,
-                            endDist,
-                        );
-                        if (windowEdgeSamples.length > 0) {
-                            overlay.beginHole();
-                            for (let k = 0; k < windowEdgeSamples.length; k++) {
-                                this.drawShadowBand(
-                                    overlay,
-                                    camera,
-                                    viewerPos,
-                                    windowEdgeSamples[k],
-                                    shadowLen,
-                                    startDist,
-                                    endDist,
-                                );
-                            }
-                            overlay.endHole();
-                        }
-                        overlay.endFill();
+                    for (const e of obstacleToShadowEdges(viewerPos, obstacle)) {
+                        windowEdges.push(e);
                     }
                 }
 
-                overlay.beginFill(OCCLUSION_OVERLAY_COLOR, OCCLUSION_OVERLAY_ALPHA);
-                this.drawShadowBand(
+                this.drawBuildingZoomShadow(
                     overlay,
                     camera,
                     viewerPos,
-                    buildingEdgeSamples,
                     shadowLen,
-                    shadowLightRadius,
-                    maxShadowDist,
+                    zoomIn,
+                    windowEdges,
                 );
-                if (windowEdgeSamples.length > 0) {
-                    overlay.beginHole();
-                    for (let k = 0; k < windowEdgeSamples.length; k++) {
-                        this.drawShadowBand(
-                            overlay,
-                            camera,
-                            viewerPos,
-                            windowEdgeSamples[k],
-                            shadowLen,
-                            shadowLightRadius,
-                            maxShadowDist,
-                        );
-                    }
-                    overlay.endHole();
-                }
-                overlay.endFill();
             }
         }
     }
@@ -792,8 +474,6 @@ export class Renderer {
         }
         let layerIdx = layer;
         const onStairs = layer & 0x2;
-        // Hack to render large/high objects (trees, smokes) on
-        // a separate layer that isn't masked off by the bunkers.
         if (onStairs) {
             layerIdx = zOrd >= 100 ? 3 : 2;
         }
@@ -844,9 +524,7 @@ export class Renderer {
                 const structures = map.m_structurePool.m_getPool();
                 for (let i = 0; i < structures.length; i++) {
                     const structure = structures[i];
-                    if (!structure.active) {
-                        continue;
-                    }
+                    if (!structure.active) continue;
                     for (let j = 0; j < structure.mask.length; j++) {
                         const m = structure.mask[j];
                         const e = v2.mul(v2.sub(m.max, m.min), 0.5);
@@ -859,7 +537,6 @@ export class Renderer {
                 mask.endFill();
             }
         } else {
-            // Redraw mask
             if (this.layerMaskDirty) {
                 this.layerMaskDirty = false;
                 mask.clear();
@@ -868,14 +545,11 @@ export class Renderer {
                 const structures = map.m_structurePool.m_getPool();
                 for (let i = 0; i < structures.length; i++) {
                     const structure = structures[i];
-                    if (!structure.active) {
-                        continue;
-                    }
+                    if (!structure.active) continue;
                     for (let j = 0; j < structure.mask.length; j++) {
                         const m = structure.mask[j];
                         const e = v2.mul(v2.sub(m.max, m.min), 0.5);
                         const c = v2.add(m.min, e);
-
                         const x = c.x - e.x;
                         const y = c.y - e.y;
                         const w = e.x * 2.0;
@@ -887,7 +561,6 @@ export class Renderer {
                 }
                 mask.endFill();
             }
-            // Position layer mask
             const p0 = camera.m_pointToScreen(v2.create(0.0, 0.0));
             const s = camera.m_scaleToScreen(1.0);
             mask.position.set(p0.x, p0.y);
@@ -902,17 +575,16 @@ export class Renderer {
         const structures = map.m_structurePool.m_getPool();
         for (let i = 0; i < structures.length; i++) {
             const structure = structures[i];
-            if (structure.active) {
-                for (let s = 0; s < structure.mask.length; s++) {
-                    const n = structure.mask[s];
-                    const c = v2.mul(v2.sub(n.max, n.min), 0.5);
-                    const m = v2.add(n.min, c);
-                    const p = m.x - c.x;
-                    const h = m.y - c.y;
-                    const u = c.x * 2;
-                    const g = c.y * 2;
-                    drawRect(mask, p, h, u, g);
-                }
+            if (!structure.active) continue;
+            for (let s = 0; s < structure.mask.length; s++) {
+                const n = structure.mask[s];
+                const c = v2.mul(v2.sub(n.max, n.min), 0.5);
+                const m = v2.add(n.min, c);
+                const p = m.x - c.x;
+                const h = m.y - c.y;
+                const u = c.x * 2;
+                const g = c.y * 2;
+                drawRect(mask, p, h, u, g);
             }
         }
         mask.endFill();
@@ -923,7 +595,6 @@ export class Renderer {
     }
 
     m_update(dt: number, camera: Camera, map: Map) {
-        // Adjust layer alpha
         const alphaTarget = this.layer > 0 ? 1.0 : 0.0;
         this.layerAlpha += step(this.layerAlpha, alphaTarget, dt * 12.0);
         const groundTarget = this.layer == 1 && this.underground ? 1.0 : 0.0;
@@ -939,7 +610,6 @@ export class Renderer {
         this.layers[1].visible = this.layerAlpha > 0.0;
         this.ground.visible = this.groundAlpha > 0.0;
 
-        // Set stairs mask
         this.redrawLayerMask(camera, map);
         this.redrawVisionOverlay(camera, map);
 
@@ -954,13 +624,8 @@ export class Renderer {
             this.layerMaskActive = false;
         }
 
-        // Sort layers
-        // let sortCount = 0;
         for (let i = 0; i < this.layers.length; i++) {
             this.layers[i].checkSort();
-            /* if (this.layers[i].checkSort()) {
-                sortCount++;
-            } */
         }
     }
 }
