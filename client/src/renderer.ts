@@ -41,7 +41,7 @@ function drawRect(gfx: PIXI.Graphics, x: number, y: number, w: number, h: number
 }
 
 const OCCLUSION_ALPHA_THRESHOLD = 0.95;
-const OCCLUSION_OVERLAY_ALPHA = 0.90;
+const OCCLUSION_OVERLAY_ALPHA = 0.99;
 const OCCLUSION_OVERLAY_COLOR = 0x060606;
 const OCCLUSION_VIEW_MARGIN = 96;
 
