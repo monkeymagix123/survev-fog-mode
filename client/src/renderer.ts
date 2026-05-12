@@ -1,15 +1,16 @@
 import * as PIXI from "pixi.js-legacy";
 import { MapObjectDefs } from "../../shared/defs/mapObjectDefs";
 import type { ObstacleDef } from "../../shared/defs/mapObjectsTyping";
-import type { AABB, Collider } from "../../shared/utils/coldet";
+import { coldet, type AABB, type Collider } from "../../shared/utils/coldet";
 import { Constants } from "../../shared/net/net";
 import { collider } from "../../shared/utils/collider";
 import { util } from "../../shared/utils/util";
-import { v2 } from "../../shared/utils/v2";
+import { type Vec2, v2 } from "../../shared/utils/v2";
 import type { Camera } from "./camera";
 import { errorLogManager } from "./errorLogs";
 import type { Game } from "./game";
 import type { Map } from "./map";
+import type { Building } from "./objects/building";
 import type { Obstacle } from "./objects/obstacle";
 
 //
@@ -40,7 +41,7 @@ function drawRect(gfx: PIXI.Graphics, x: number, y: number, w: number, h: number
 }
 
 const OCCLUSION_ALPHA_THRESHOLD = 0.95;
-const OCCLUSION_OVERLAY_ALPHA = 0.55;
+const OCCLUSION_OVERLAY_ALPHA = 0.90;
 const OCCLUSION_OVERLAY_COLOR = 0x060606;
 const OCCLUSION_VIEW_MARGIN = 96;
 
@@ -94,6 +95,31 @@ function getObstacleShadowEdgePoints(viewerPos: { x: number; y: number }, obstac
         v2.add(col.pos, v2.mul(perp, col.rad)),
         v2.sub(col.pos, v2.mul(perp, col.rad)),
     ] as const;
+}
+
+function getScreenShadowQuad(
+    camera: Camera,
+    viewerPos: Vec2,
+    edge0: Vec2,
+    edge1: Vec2,
+    shadowLen: number,
+) {
+    const viewerScreen = camera.m_pointToScreen(viewerPos);
+    const screen0 = camera.m_pointToScreen(edge0);
+    const screen1 = camera.m_pointToScreen(edge1);
+    const dir0 = v2.sub(screen0, viewerScreen);
+    const dir1 = v2.sub(screen1, viewerScreen);
+
+    if (v2.lengthSqr(dir0) < 0.0001 || v2.lengthSqr(dir1) < 0.0001) {
+        return null;
+    }
+
+    return {
+        near0: screen0,
+        near1: screen1,
+        far0: v2.add(screen0, v2.mul(v2.normalizeSafe(dir0, v2.create(1, 0)), shadowLen)),
+        far1: v2.add(screen1, v2.mul(v2.normalizeSafe(dir1, v2.create(1, 0)), shadowLen)),
+    };
 }
 
 export class Renderer {
@@ -151,6 +177,81 @@ export class Renderer {
         );
     }
 
+    private isWindowOpeningObstacle(viewerLayer: number, obstacle: Obstacle) {
+        return (
+            obstacle.active &&
+            !obstacle.dead &&
+            !obstacle.isSkin &&
+            util.sameLayer(viewerLayer, obstacle.layer) &&
+            (obstacle.isWindow || obstacle.type.includes("window"))
+        );
+    }
+
+    private isBuildingVisionBlocker(viewerLayer: number, building: Building) {
+        return (
+            building.active &&
+            !building.ceilingDead &&
+            util.sameLayer(viewerLayer, building.layer)
+        );
+    }
+
+    private segmentUsesBuildingWindow(
+        viewerPos: Vec2,
+        targetPos: Vec2,
+        boundaryPoint: Vec2,
+        viewerLayer: number,
+        map: Map,
+        zoomIn: Collider,
+    ) {
+        const obstacles = map.m_obstaclePool.m_getPool();
+        const maxWindowDistSq = 9;
+
+        for (let i = 0; i < obstacles.length; i++) {
+            const obstacle = obstacles[i];
+            if (
+                !this.isWindowOpeningObstacle(viewerLayer, obstacle) ||
+                !collider.intersect(obstacle.collider, zoomIn)
+            ) {
+                continue;
+            }
+
+            const intersection = collider.intersectSegment(
+                obstacle.collider,
+                viewerPos,
+                targetPos,
+            );
+            if (!intersection) {
+                continue;
+            }
+
+            if (v2.lengthSqr(v2.sub(intersection.point, boundaryPoint)) <= maxWindowDistSq) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private drawShadowQuad(
+        overlay: PIXI.Graphics,
+        camera: Camera,
+        viewerPos: Vec2,
+        edge0: Vec2,
+        edge1: Vec2,
+        shadowLen: number,
+    ) {
+        const quad = getScreenShadowQuad(camera, viewerPos, edge0, edge1, shadowLen);
+        if (!quad) {
+            return;
+        }
+
+        overlay.moveTo(quad.near0.x, quad.near0.y);
+        overlay.lineTo(quad.near1.x, quad.near1.y);
+        overlay.lineTo(quad.far1.x, quad.far1.y);
+        overlay.lineTo(quad.far0.x, quad.far0.y);
+        overlay.closePath();
+    }
+
     private redrawVisionOverlay(camera: Camera, map: Map) {
         const overlay = this.visionOverlay;
         overlay.clear();
@@ -173,10 +274,10 @@ export class Renderer {
         overlay.visible = true;
 
         const viewerPos = camera.m_pos;
-        const viewerScreen = camera.m_pointToScreen(viewerPos);
         const shadowLen =
             Math.hypot(camera.m_screenWidth, camera.m_screenHeight) + OCCLUSION_VIEW_MARGIN * 2;
         const obstacles = map.m_obstaclePool.m_getPool();
+        const buildings = map.m_buildingPool.m_getPool();
 
         overlay.beginFill(OCCLUSION_OVERLAY_COLOR, OCCLUSION_OVERLAY_ALPHA);
 
@@ -201,29 +302,82 @@ export class Renderer {
             }
 
             const [leftWorld, rightWorld] = getObstacleShadowEdgePoints(viewerPos, obstacle);
-            const leftScreen = camera.m_pointToScreen(leftWorld);
-            const rightScreen = camera.m_pointToScreen(rightWorld);
-            const leftDir = v2.sub(leftScreen, viewerScreen);
-            const rightDir = v2.sub(rightScreen, viewerScreen);
+            this.drawShadowQuad(overlay, camera, viewerPos, leftWorld, rightWorld, shadowLen);
+        }
 
-            if (v2.lengthSqr(leftDir) < 0.0001 || v2.lengthSqr(rightDir) < 0.0001) {
+        for (let i = 0; i < buildings.length; i++) {
+            const building = buildings[i];
+            if (!this.isBuildingVisionBlocker(activePlayer.layer, building)) {
                 continue;
             }
 
-            const farLeft = v2.add(
-                leftScreen,
-                v2.mul(v2.normalizeSafe(leftDir, v2.create(1, 0)), shadowLen),
-            );
-            const farRight = v2.add(
-                rightScreen,
-                v2.mul(v2.normalizeSafe(rightDir, v2.create(1, 0)), shadowLen),
-            );
+            for (let j = 0; j < building.ceiling.zoomRegions.length; j++) {
+                const zoomIn = building.ceiling.zoomRegions[j].zoomIn;
+                if (!zoomIn || zoomIn.type !== collider.Type.Aabb) {
+                    continue;
+                }
 
-            overlay.moveTo(leftScreen.x, leftScreen.y);
-            overlay.lineTo(rightScreen.x, rightScreen.y);
-            overlay.lineTo(farRight.x, farRight.y);
-            overlay.lineTo(farLeft.x, farLeft.y);
-            overlay.closePath();
+                if (coldet.testPointAabb(viewerPos, zoomIn.min, zoomIn.max)) {
+                    continue;
+                }
+
+                const centerScreen = camera.m_pointToScreen(getColliderCenter(zoomIn));
+                if (
+                    centerScreen.x < -OCCLUSION_VIEW_MARGIN ||
+                    centerScreen.x > camera.m_screenWidth + OCCLUSION_VIEW_MARGIN ||
+                    centerScreen.y < -OCCLUSION_VIEW_MARGIN ||
+                    centerScreen.y > camera.m_screenHeight + OCCLUSION_VIEW_MARGIN
+                ) {
+                    continue;
+                }
+
+                const [leftWorld, rightWorld] = getAabbShadowEdgePoints(viewerPos, zoomIn);
+                this.drawShadowQuad(overlay, camera, viewerPos, leftWorld, rightWorld, shadowLen);
+
+                overlay.beginHole();
+                for (let k = 0; k < obstacles.length; k++) {
+                    const obstacle = obstacles[k];
+                    if (
+                        !this.isWindowOpeningObstacle(activePlayer.layer, obstacle) ||
+                        !collider.intersect(obstacle.collider, zoomIn)
+                    ) {
+                        continue;
+                    }
+
+                    const boundaryHit = collider.intersectSegment(
+                        zoomIn,
+                        viewerPos,
+                        obstacle.pos,
+                    );
+                    if (
+                        !boundaryHit ||
+                        !this.segmentUsesBuildingWindow(
+                            viewerPos,
+                            obstacle.pos,
+                            boundaryHit.point,
+                            activePlayer.layer,
+                            map,
+                            zoomIn,
+                        )
+                    ) {
+                        continue;
+                    }
+
+                    const [windowLeft, windowRight] = getObstacleShadowEdgePoints(
+                        viewerPos,
+                        obstacle,
+                    );
+                    this.drawShadowQuad(
+                        overlay,
+                        camera,
+                        viewerPos,
+                        windowLeft,
+                        windowRight,
+                        shadowLen,
+                    );
+                }
+                overlay.endHole();
+            }
         }
 
         overlay.endFill();

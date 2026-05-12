@@ -2484,6 +2484,96 @@ export class Player extends BaseGameObject {
         );
     }
 
+    private _isWindowOpening(obj: GameObject): obj is Obstacle {
+        return (
+            obj.__type === ObjectType.Obstacle &&
+            !obj.dead &&
+            !obj.isSkin &&
+            (obj.isWindow || obj.type.includes("window"))
+        );
+    }
+
+    private _segmentUsesBuildingWindow(
+        viewerPos: Vec2,
+        targetPos: Vec2,
+        boundaryPoint: Vec2,
+        viewerLayer: number,
+        blockers: GameObject[],
+    ) {
+        const maxWindowDistSq = 9;
+
+        for (let i = 0; i < blockers.length; i++) {
+            const blocker = blockers[i];
+            if (!this._isWindowOpening(blocker) || !util.sameLayer(viewerLayer, blocker.layer)) {
+                continue;
+            }
+
+            const intersection = collider.intersectSegment(
+                blocker.collider,
+                viewerPos,
+                targetPos,
+            );
+            if (!intersection) {
+                continue;
+            }
+
+            if (v2.lengthSqr(v2.sub(intersection.point, boundaryPoint)) <= maxWindowDistSq) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private _isOccludedByBuilding(
+        viewer: Player,
+        target: GameObject,
+        building: Building,
+        blockers: GameObject[],
+    ) {
+        if (
+            building.ceilingDead ||
+            !util.sameLayer(viewer.layer, building.layer) ||
+            !util.sameLayer(viewer.layer, target.layer)
+        ) {
+            return false;
+        }
+
+        for (let i = 0; i < building.zoomRegions.length; i++) {
+            const zoomIn = building.zoomRegions[i].zoomIn;
+            if (!zoomIn) {
+                continue;
+            }
+
+            const viewerInside = coldet.testPointAabb(viewer.pos, zoomIn.min, zoomIn.max);
+            const targetInside = coldet.testPointAabb(target.pos, zoomIn.min, zoomIn.max);
+            if (viewerInside === targetInside) {
+                continue;
+            }
+
+            const boundaryHit = collider.intersectSegment(zoomIn, viewer.pos, target.pos);
+            if (!boundaryHit) {
+                continue;
+            }
+
+            if (
+                this._segmentUsesBuildingWindow(
+                    viewer.pos,
+                    target.pos,
+                    boundaryHit.point,
+                    viewer.layer,
+                    blockers,
+                )
+            ) {
+                continue;
+            }
+
+            return true;
+        }
+
+        return false;
+    }
+
     private _supportsOpaqueOcclusion(obj: GameObject) {
         return obj.__type !== ObjectType.Building && obj.__type !== ObjectType.Structure;
     }
@@ -2501,6 +2591,13 @@ export class Player extends BaseGameObject {
         const blockers = this.game.grid.intersectLineSegment(viewer.pos, target.pos);
         for (let i = 0; i < blockers.length; i++) {
             const blocker = blockers[i];
+            if (
+                blocker.__type === ObjectType.Building &&
+                this._isOccludedByBuilding(viewer, target, blocker, blockers)
+            ) {
+                return true;
+            }
+
             if (blocker === target || !this._isOpaqueVisionBlocker(viewer.layer, blocker)) {
                 continue;
             }
