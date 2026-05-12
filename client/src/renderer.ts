@@ -45,7 +45,9 @@ const OCCLUSION_ALPHA_THRESHOLD = 0.95;
 const OCCLUSION_OVERLAY_ALPHA = 0.90;
 const OCCLUSION_OVERLAY_COLOR = 0x060606;
 const OCCLUSION_VIEW_MARGIN = 96;
-const OCCLUSION_BAND_COUNT = 6;
+const OCCLUSION_LIGHT_BAND_COUNT = 7;
+const OCCLUSION_LIGHT_MIN_ALPHA = 0.18;
+const OCCLUSION_LIGHT_RADIUS = 6;
 const OCCLUSION_MAX_EDGE_SAMPLES = 10;
 const OCCLUSION_MIN_EDGE_SAMPLES = 3;
 
@@ -342,10 +344,28 @@ export class Renderer {
         );
     }
 
-    private getOcclusionBandAlpha(bandIdx: number) {
-        const bandT = (bandIdx + 1) / OCCLUSION_BAND_COUNT;
-        const eased = math.smoothstep(bandT, 0, 1);
-        return math.lerp(eased, 0.7, OCCLUSION_OVERLAY_ALPHA);
+    private getLightAdjustedOcclusionAlpha(
+        camera: Camera,
+        viewerPos: Vec2,
+        edgePoints: readonly Vec2[],
+        shadowLen: number,
+        bandStart: number,
+        bandEnd: number,
+    ) {
+        const viewerScreen = camera.m_pointToScreen(viewerPos);
+        let avgEdgeDist = 0;
+
+        for (let i = 0; i < edgePoints.length; i++) {
+            avgEdgeDist += v2.distance(camera.m_pointToScreen(edgePoints[i]), viewerScreen);
+        }
+        avgEdgeDist /= Math.max(edgePoints.length, 1);
+
+        const bandMidDist = avgEdgeDist + shadowLen * ((bandStart + bandEnd) * 0.5);
+        const lightRadius = camera.m_scaleToScreen(OCCLUSION_LIGHT_RADIUS);
+        const lightFactor =
+            (lightRadius * lightRadius) / (bandMidDist * bandMidDist + lightRadius * lightRadius);
+
+        return math.lerp(lightFactor, OCCLUSION_OVERLAY_ALPHA, OCCLUSION_LIGHT_MIN_ALPHA);
     }
 
     private drawShadowBand(
@@ -433,12 +453,19 @@ export class Renderer {
                 this.getShadowSampleCount(camera, leftWorld, rightWorld),
             );
 
-            for (let bandIdx = 0; bandIdx < OCCLUSION_BAND_COUNT; bandIdx++) {
-                const bandStart = bandIdx / OCCLUSION_BAND_COUNT;
-                const bandEnd = (bandIdx + 1) / OCCLUSION_BAND_COUNT;
+            for (let bandIdx = 0; bandIdx < OCCLUSION_LIGHT_BAND_COUNT; bandIdx++) {
+                const bandStart = bandIdx / OCCLUSION_LIGHT_BAND_COUNT;
+                const bandEnd = (bandIdx + 1) / OCCLUSION_LIGHT_BAND_COUNT;
                 overlay.beginFill(
                     OCCLUSION_OVERLAY_COLOR,
-                    this.getOcclusionBandAlpha(bandIdx),
+                    this.getLightAdjustedOcclusionAlpha(
+                        camera,
+                        viewerPos,
+                        edgeSamples,
+                        shadowLen,
+                        bandStart,
+                        bandEnd,
+                    ),
                 );
                 this.drawShadowBand(
                     overlay,
@@ -527,13 +554,20 @@ export class Renderer {
                     );
                 }
 
-                for (let bandIdx = 0; bandIdx < OCCLUSION_BAND_COUNT; bandIdx++) {
-                    const bandStart = bandIdx / OCCLUSION_BAND_COUNT;
-                    const bandEnd = (bandIdx + 1) / OCCLUSION_BAND_COUNT;
+                for (let bandIdx = 0; bandIdx < OCCLUSION_LIGHT_BAND_COUNT; bandIdx++) {
+                    const bandStart = bandIdx / OCCLUSION_LIGHT_BAND_COUNT;
+                    const bandEnd = (bandIdx + 1) / OCCLUSION_LIGHT_BAND_COUNT;
 
                     overlay.beginFill(
                         OCCLUSION_OVERLAY_COLOR,
-                        this.getOcclusionBandAlpha(bandIdx),
+                        this.getLightAdjustedOcclusionAlpha(
+                            camera,
+                            viewerPos,
+                            buildingEdgeSamples,
+                            shadowLen,
+                            bandStart,
+                            bandEnd,
+                        ),
                     );
                     this.drawShadowBand(
                         overlay,
