@@ -44,6 +44,7 @@ function drawRect(gfx: PIXI.Graphics, x: number, y: number, w: number, h: number
 const OCCLUSION_ALPHA_THRESHOLD = 0.95;
 const OCCLUSION_OVERLAY_ALPHA = 0.90;
 const OCCLUSION_OVERLAY_COLOR = 0x060606;
+const OCCLUSION_BASE_DIM_ALPHA = 0.08;
 const OCCLUSION_VIEW_MARGIN = 96;
 const OCCLUSION_LIGHT_BAND_COUNT = 20;
 const OCCLUSION_LIGHT_MIN_ALPHA = 0.18;
@@ -430,6 +431,12 @@ export class Renderer {
         }
 
         overlay.visible = true;
+
+        if (OCCLUSION_BASE_DIM_ALPHA > 0) {
+            overlay.beginFill(OCCLUSION_OVERLAY_COLOR, OCCLUSION_BASE_DIM_ALPHA);
+            overlay.drawRect(0, 0, camera.m_screenWidth, camera.m_screenHeight);
+            overlay.endFill();
+        }
 
         const viewerPos = camera.m_pos;
         const shadowLen =
