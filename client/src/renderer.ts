@@ -45,7 +45,7 @@ const OCCLUSION_ALPHA_THRESHOLD = 0.95;
 const OCCLUSION_OVERLAY_ALPHA = 0.90;
 const OCCLUSION_OVERLAY_COLOR = 0x060606;
 const OCCLUSION_VIEW_MARGIN = 96;
-const OCCLUSION_LIGHT_BAND_COUNT = 7;
+const OCCLUSION_LIGHT_BAND_COUNT = 20;
 const OCCLUSION_LIGHT_MIN_ALPHA = 0.18;
 const OCCLUSION_LIGHT_RADIUS = 6;
 const OCCLUSION_MAX_EDGE_SAMPLES = 10;
@@ -197,8 +197,8 @@ function getScreenShadowStrip(
     viewerPos: Vec2,
     edgePoints: readonly Vec2[],
     shadowLen: number,
-    shadowStart: number,
-    shadowEnd: number,
+    startDist: number,
+    endDist: number,
 ) {
     const viewerScreen = camera.m_pointToScreen(viewerPos);
     const near: Vec2[] = [];
@@ -207,13 +207,21 @@ function getScreenShadowStrip(
     for (let i = 0; i < edgePoints.length; i++) {
         const screen = camera.m_pointToScreen(edgePoints[i]);
         const dir = v2.sub(screen, viewerScreen);
-        if (v2.lengthSqr(dir) < 0.0001) {
+        const edgeDist = v2.length(dir);
+        if (edgeDist < 0.0001) {
             continue;
         }
 
         const normDir = v2.normalizeSafe(dir, v2.create(1, 0));
-        near.push(v2.add(screen, v2.mul(normDir, shadowLen * shadowStart)));
-        far.push(v2.add(screen, v2.mul(normDir, shadowLen * shadowEnd)));
+        const maxDist = edgeDist + shadowLen;
+        const clampedStartDist = math.clamp(startDist, edgeDist, maxDist);
+        const clampedEndDist = math.clamp(endDist, edgeDist, maxDist);
+        if (clampedEndDist - clampedStartDist < 0.5) {
+            continue;
+        }
+
+        near.push(v2.add(viewerScreen, v2.mul(normDir, clampedStartDist)));
+        far.push(v2.add(viewerScreen, v2.mul(normDir, clampedEndDist)));
     }
 
     if (near.length < 2 || far.length < 2) {
@@ -345,27 +353,30 @@ export class Renderer {
     }
 
     private getLightAdjustedOcclusionAlpha(
+        bandIdx: number,
+    ) {
+        const bandT = (bandIdx + 1) / OCCLUSION_LIGHT_BAND_COUNT;
+        const eased = math.smoothstep(bandT, 0, 1);
+        return math.lerp(eased, OCCLUSION_LIGHT_MIN_ALPHA, OCCLUSION_OVERLAY_ALPHA);
+    }
+
+    private getShadowMaxDist(
         camera: Camera,
         viewerPos: Vec2,
         edgePoints: readonly Vec2[],
         shadowLen: number,
-        bandStart: number,
-        bandEnd: number,
     ) {
         const viewerScreen = camera.m_pointToScreen(viewerPos);
-        let avgEdgeDist = 0;
+        let maxEdgeDist = 0;
 
         for (let i = 0; i < edgePoints.length; i++) {
-            avgEdgeDist += v2.distance(camera.m_pointToScreen(edgePoints[i]), viewerScreen);
+            maxEdgeDist = Math.max(
+                maxEdgeDist,
+                v2.distance(camera.m_pointToScreen(edgePoints[i]), viewerScreen),
+            );
         }
-        avgEdgeDist /= Math.max(edgePoints.length, 1);
 
-        const bandMidDist = avgEdgeDist + shadowLen * ((bandStart + bandEnd) * 0.5);
-        const lightRadius = camera.m_scaleToScreen(OCCLUSION_LIGHT_RADIUS);
-        const lightFactor =
-            (lightRadius * lightRadius) / (bandMidDist * bandMidDist + lightRadius * lightRadius);
-
-        return math.lerp(lightFactor, OCCLUSION_OVERLAY_ALPHA, OCCLUSION_LIGHT_MIN_ALPHA);
+        return maxEdgeDist + shadowLen;
     }
 
     private drawShadowBand(
@@ -374,16 +385,16 @@ export class Renderer {
         viewerPos: Vec2,
         edgePoints: readonly Vec2[],
         shadowLen: number,
-        bandStart: number,
-        bandEnd: number,
+        startDist: number,
+        endDist: number,
     ) {
         const strip = getScreenShadowStrip(
             camera,
             viewerPos,
             edgePoints,
             shadowLen,
-            bandStart,
-            bandEnd,
+            startDist,
+            endDist,
         );
         if (!strip) {
             return;
@@ -452,20 +463,20 @@ export class Renderer {
                 obstacle,
                 this.getShadowSampleCount(camera, leftWorld, rightWorld),
             );
+            const lightRadius = camera.m_scaleToScreen(OCCLUSION_LIGHT_RADIUS);
+            const maxShadowDist = this.getShadowMaxDist(
+                camera,
+                viewerPos,
+                edgeSamples,
+                shadowLen,
+            );
 
             for (let bandIdx = 0; bandIdx < OCCLUSION_LIGHT_BAND_COUNT; bandIdx++) {
-                const bandStart = bandIdx / OCCLUSION_LIGHT_BAND_COUNT;
-                const bandEnd = (bandIdx + 1) / OCCLUSION_LIGHT_BAND_COUNT;
+                const startDist = (bandIdx / OCCLUSION_LIGHT_BAND_COUNT) * lightRadius;
+                const endDist = ((bandIdx + 1) / OCCLUSION_LIGHT_BAND_COUNT) * lightRadius;
                 overlay.beginFill(
                     OCCLUSION_OVERLAY_COLOR,
-                    this.getLightAdjustedOcclusionAlpha(
-                        camera,
-                        viewerPos,
-                        edgeSamples,
-                        shadowLen,
-                        bandStart,
-                        bandEnd,
-                    ),
+                    this.getLightAdjustedOcclusionAlpha(bandIdx),
                 );
                 this.drawShadowBand(
                     overlay,
@@ -473,11 +484,23 @@ export class Renderer {
                     viewerPos,
                     edgeSamples,
                     shadowLen,
-                    bandStart,
-                    bandEnd,
+                    startDist,
+                    endDist,
                 );
                 overlay.endFill();
             }
+
+            overlay.beginFill(OCCLUSION_OVERLAY_COLOR, OCCLUSION_OVERLAY_ALPHA);
+            this.drawShadowBand(
+                overlay,
+                camera,
+                viewerPos,
+                edgeSamples,
+                shadowLen,
+                lightRadius,
+                maxShadowDist,
+            );
+            overlay.endFill();
         }
 
         for (let i = 0; i < buildings.length; i++) {
@@ -512,6 +535,13 @@ export class Renderer {
                     this.getShadowSampleCount(camera, leftWorld, rightWorld),
                 );
                 const windowEdgeSamples: Vec2[][] = [];
+                const lightRadius = camera.m_scaleToScreen(OCCLUSION_LIGHT_RADIUS);
+                const maxShadowDist = this.getShadowMaxDist(
+                    camera,
+                    viewerPos,
+                    buildingEdgeSamples,
+                    shadowLen,
+                );
 
                 for (let k = 0; k < obstacles.length; k++) {
                     const obstacle = obstacles[k];
@@ -555,19 +585,12 @@ export class Renderer {
                 }
 
                 for (let bandIdx = 0; bandIdx < OCCLUSION_LIGHT_BAND_COUNT; bandIdx++) {
-                    const bandStart = bandIdx / OCCLUSION_LIGHT_BAND_COUNT;
-                    const bandEnd = (bandIdx + 1) / OCCLUSION_LIGHT_BAND_COUNT;
+                    const startDist = (bandIdx / OCCLUSION_LIGHT_BAND_COUNT) * lightRadius;
+                    const endDist = ((bandIdx + 1) / OCCLUSION_LIGHT_BAND_COUNT) * lightRadius;
 
                     overlay.beginFill(
                         OCCLUSION_OVERLAY_COLOR,
-                        this.getLightAdjustedOcclusionAlpha(
-                            camera,
-                            viewerPos,
-                            buildingEdgeSamples,
-                            shadowLen,
-                            bandStart,
-                            bandEnd,
-                        ),
+                        this.getLightAdjustedOcclusionAlpha(bandIdx),
                     );
                     this.drawShadowBand(
                         overlay,
@@ -575,8 +598,8 @@ export class Renderer {
                         viewerPos,
                         buildingEdgeSamples,
                         shadowLen,
-                        bandStart,
-                        bandEnd,
+                        startDist,
+                        endDist,
                     );
                     if (windowEdgeSamples.length > 0) {
                         overlay.beginHole();
@@ -587,14 +610,41 @@ export class Renderer {
                                 viewerPos,
                                 windowEdgeSamples[k],
                                 shadowLen,
-                                bandStart,
-                                bandEnd,
+                                startDist,
+                                endDist,
                             );
                         }
                         overlay.endHole();
                     }
                     overlay.endFill();
                 }
+
+                overlay.beginFill(OCCLUSION_OVERLAY_COLOR, OCCLUSION_OVERLAY_ALPHA);
+                this.drawShadowBand(
+                    overlay,
+                    camera,
+                    viewerPos,
+                    buildingEdgeSamples,
+                    shadowLen,
+                    lightRadius,
+                    maxShadowDist,
+                );
+                if (windowEdgeSamples.length > 0) {
+                    overlay.beginHole();
+                    for (let k = 0; k < windowEdgeSamples.length; k++) {
+                        this.drawShadowBand(
+                            overlay,
+                            camera,
+                            viewerPos,
+                            windowEdgeSamples[k],
+                            shadowLen,
+                            lightRadius,
+                            maxShadowDist,
+                        );
+                    }
+                    overlay.endHole();
+                }
+                overlay.endFill();
             }
         }
     }
