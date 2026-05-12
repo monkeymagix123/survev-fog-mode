@@ -44,7 +44,7 @@ function drawRect(gfx: PIXI.Graphics, x: number, y: number, w: number, h: number
 const OCCLUSION_ALPHA_THRESHOLD = 0.95;
 const OCCLUSION_OVERLAY_ALPHA = 0.90;
 const OCCLUSION_OVERLAY_COLOR = 0x060606;
-const OCCLUSION_BASE_DIM_ALPHA = 0.25;
+const OCCLUSION_BASE_DIM_ALPHA = 0.50;
 const OCCLUSION_VIEW_MARGIN = 96;
 const OCCLUSION_LIGHT_BAND_COUNT = 20;
 const OCCLUSION_LIGHT_MIN_ALPHA = 0.18;
@@ -305,41 +305,21 @@ export class Renderer {
         );
     }
 
-    private segmentUsesBuildingWindow(
-        viewerPos: Vec2,
-        targetPos: Vec2,
+    private boundaryUsesBuildingWindow(
         boundaryPoint: Vec2,
-        viewerLayer: number,
-        map: Map,
-        zoomIn: Collider,
+        obstacle: Obstacle,
     ) {
-        const obstacles = map.m_obstaclePool.m_getPool();
-        const maxWindowDistSq = 9;
-
-        for (let i = 0; i < obstacles.length; i++) {
-            const obstacle = obstacles[i];
-            if (
-                !this.isWindowOpeningObstacle(viewerLayer, obstacle) ||
-                !collider.intersect(obstacle.collider, zoomIn)
-            ) {
-                continue;
-            }
-
-            const intersection = collider.intersectSegment(
-                obstacle.collider,
-                viewerPos,
-                targetPos,
+        const boundaryTolerance = 1.5;
+        if (obstacle.collider.type === collider.Type.Aabb) {
+            return coldet.testPointAabb(
+                boundaryPoint,
+                v2.sub(obstacle.collider.min, v2.create(boundaryTolerance, boundaryTolerance)),
+                v2.add(obstacle.collider.max, v2.create(boundaryTolerance, boundaryTolerance)),
             );
-            if (!intersection) {
-                continue;
-            }
-
-            if (v2.lengthSqr(v2.sub(intersection.point, boundaryPoint)) <= maxWindowDistSq) {
-                return true;
-            }
         }
 
-        return false;
+        const maxDist = obstacle.collider.rad + boundaryTolerance;
+        return v2.lengthSqr(v2.sub(boundaryPoint, obstacle.collider.pos)) <= maxDist * maxDist;
     }
 
     private getShadowSampleCount(camera: Camera, edge0: Vec2, edge1: Vec2) {
@@ -559,22 +539,16 @@ export class Renderer {
                         continue;
                     }
 
-                    const boundaryHit = collider.intersectSegment(
-                        zoomIn,
-                        viewerPos,
-                        obstacle.pos,
+                    const windowCenter = getColliderCenter(obstacle.collider);
+                    const windowProbe = v2.add(
+                        windowCenter,
+                        v2.mul(
+                            v2.normalizeSafe(v2.sub(windowCenter, viewerPos), v2.create(1, 0)),
+                            8,
+                        ),
                     );
-                    if (
-                        !boundaryHit ||
-                        !this.segmentUsesBuildingWindow(
-                            viewerPos,
-                            obstacle.pos,
-                            boundaryHit.point,
-                            activePlayer.layer,
-                            map,
-                            zoomIn,
-                        )
-                    ) {
+                    const boundaryHit = collider.intersectSegment(zoomIn, viewerPos, windowProbe);
+                    if (!boundaryHit || !this.boundaryUsesBuildingWindow(boundaryHit.point, obstacle)) {
                         continue;
                     }
 
