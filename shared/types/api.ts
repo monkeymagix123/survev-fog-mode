@@ -66,6 +66,13 @@ export interface SiteInfoRes {
     captchaEnabled: boolean;
     visibility: {
         hideObjectsBehindOpaqueObstacles: boolean;
+        fogMode: {
+            ambientDarkness: number;
+            lightStrength: number;
+            lightFalloff: number;
+            lightFalloffStart: number;
+            enableShadows: boolean;
+        };
     };
     modes: Array<{
         mapName: string;

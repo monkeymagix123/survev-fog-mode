@@ -66,6 +66,13 @@ export function getConfig(isProduction: boolean, dir: string) {
         uniqueInGameNames: true,
         visibility: {
             hideObjectsBehindOpaqueObstacles: false,
+            fogMode: {
+                ambientDarkness: 1,
+                lightStrength: 1.15,
+                lightFalloff: 2,
+                lightFalloffStart: 4,
+                enableShadows: true,
+            },
         },
         debug: {
             spawnMode: "default",

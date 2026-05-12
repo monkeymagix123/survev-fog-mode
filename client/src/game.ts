@@ -57,6 +57,14 @@ export interface Ctx {
     decalBarn: DecalBarn;
 }
 
+export interface FogVisibilitySettings {
+    ambientDarkness: number;
+    lightStrength: number;
+    lightFalloff: number;
+    lightFalloffStart: number;
+    enableShadows: boolean;
+}
+
 export class Game {
     initialized = false;
     teamMode: TeamMode = TeamMode.Solo;
@@ -111,6 +119,13 @@ export class Game {
     m_debugZoom!: number;
     m_useDebugZoom!: boolean;
     m_obstacleOcclusionOverlay = false;
+    m_fogVisibilitySettings: FogVisibilitySettings = {
+        ambientDarkness: 1,
+        lightStrength: 1.15,
+        lightFalloff: 2,
+        lightFalloffStart: 4,
+        enableShadows: true,
+    };
 
     editor!: Editor;
     debugHUD!: DebugHUD;

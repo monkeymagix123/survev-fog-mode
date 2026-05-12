@@ -1,6 +1,7 @@
 import type { Vec2 } from "../utils/v2";
 import type { RoleDef } from "./gameObjects/roleDefs";
 import { Main } from "./maps/baseDefs";
+import { MainFog } from "./maps/mainFogDefs";
 import { Beach } from "./maps/beachDefs";
 import { Birthday } from "./maps/birthdayDefs";
 import { Cobalt } from "./maps/cobaltDefs";
@@ -40,6 +41,7 @@ export type Atlas =
 
 export const MapDefs = {
     main: Main,
+    main_fog: MainFog,
     main_spring: MainSpring,
     main_summer: MainSummer,
     desert: Desert,

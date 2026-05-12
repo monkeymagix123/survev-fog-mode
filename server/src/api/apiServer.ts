@@ -87,6 +87,13 @@ export class ApiServer {
             visibility: {
                 hideObjectsBehindOpaqueObstacles:
                     Config.visibility.hideObjectsBehindOpaqueObstacles,
+                fogMode: {
+                    ambientDarkness: Config.visibility.fogMode.ambientDarkness,
+                    lightStrength: Config.visibility.fogMode.lightStrength,
+                    lightFalloff: Config.visibility.fogMode.lightFalloff,
+                    lightFalloffStart: Config.visibility.fogMode.lightFalloffStart,
+                    enableShadows: Config.visibility.fogMode.enableShadows,
+                },
             },
         };
 
