@@ -42,7 +42,7 @@ function drawRect(gfx: PIXI.Graphics, x: number, y: number, w: number, h: number
 }
 
 const OCCLUSION_ALPHA_THRESHOLD = 0.95;
-const OCCLUSION_OVERLAY_ALPHA = 0.82;
+const OCCLUSION_OVERLAY_ALPHA = 0.90;
 const OCCLUSION_OVERLAY_COLOR = 0x060606;
 const OCCLUSION_VIEW_MARGIN = 96;
 const OCCLUSION_BAND_COUNT = 6;
@@ -345,7 +345,7 @@ export class Renderer {
     private getOcclusionBandAlpha(bandIdx: number) {
         const bandT = (bandIdx + 1) / OCCLUSION_BAND_COUNT;
         const eased = math.smoothstep(bandT, 0, 1);
-        return math.lerp(eased, 0.05, OCCLUSION_OVERLAY_ALPHA);
+        return math.lerp(eased, 0.7, OCCLUSION_OVERLAY_ALPHA);
     }
 
     private drawShadowBand(
