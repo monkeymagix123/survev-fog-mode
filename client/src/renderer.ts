@@ -4,6 +4,7 @@ import type { ObstacleDef } from "../../shared/defs/mapObjectsTyping";
 import { coldet, type AABB, type Collider } from "../../shared/utils/coldet";
 import { Constants } from "../../shared/net/net";
 import { collider } from "../../shared/utils/collider";
+import { math } from "../../shared/utils/math";
 import { util } from "../../shared/utils/util";
 import { type Vec2, v2 } from "../../shared/utils/v2";
 import type { Camera } from "./camera";
@@ -41,9 +42,12 @@ function drawRect(gfx: PIXI.Graphics, x: number, y: number, w: number, h: number
 }
 
 const OCCLUSION_ALPHA_THRESHOLD = 0.95;
-const OCCLUSION_OVERLAY_ALPHA = 0.99;
+const OCCLUSION_OVERLAY_ALPHA = 0.82;
 const OCCLUSION_OVERLAY_COLOR = 0x060606;
 const OCCLUSION_VIEW_MARGIN = 96;
+const OCCLUSION_BAND_COUNT = 6;
+const OCCLUSION_MAX_EDGE_SAMPLES = 10;
+const OCCLUSION_MIN_EDGE_SAMPLES = 3;
 
 function getColliderCenter(col: Collider) {
     return col.type === collider.Type.Aabb
@@ -83,6 +87,81 @@ function getAabbShadowEdgePoints(viewerPos: { x: number; y: number }, col: AABB)
     return [left, right] as const;
 }
 
+function getAabbVisibleEdgePath(viewerPos: { x: number; y: number }, col: AABB) {
+    const corners = [
+        v2.create(col.min.x, col.min.y),
+        v2.create(col.max.x, col.min.y),
+        v2.create(col.max.x, col.max.y),
+        v2.create(col.min.x, col.max.y),
+    ];
+    const [left, right] = getAabbShadowEdgePoints(viewerPos, col);
+    const leftIdx = corners.findIndex((corner) => v2.eq(corner, left));
+    const rightIdx = corners.findIndex((corner) => v2.eq(corner, right));
+    if (leftIdx < 0 || rightIdx < 0) {
+        return [left, right];
+    }
+
+    const forwardPath = [corners[leftIdx]];
+    for (let idx = leftIdx; idx !== rightIdx; idx = (idx + 1) % corners.length) {
+        forwardPath.push(corners[(idx + 1) % corners.length]);
+    }
+
+    const backwardPath = [corners[leftIdx]];
+    for (
+        let idx = leftIdx;
+        idx !== rightIdx;
+        idx = (idx - 1 + corners.length) % corners.length
+    ) {
+        backwardPath.push(corners[(idx - 1 + corners.length) % corners.length]);
+    }
+
+    const pathScore = (path: Vec2[]) => {
+        let score = 0;
+        for (let i = 0; i < path.length; i++) {
+            score += v2.length(v2.sub(path[i], viewerPos));
+        }
+        return score / path.length;
+    };
+
+    return pathScore(forwardPath) <= pathScore(backwardPath) ? forwardPath : backwardPath;
+}
+
+function samplePolyline(points: readonly Vec2[], sampleCount: number) {
+    if (points.length <= 1 || sampleCount <= points.length) {
+        return points.map((point) => v2.copy(point));
+    }
+
+    let totalLen = 0;
+    const segLens: number[] = [];
+    for (let i = 1; i < points.length; i++) {
+        const segLen = v2.distance(points[i - 1], points[i]);
+        segLens.push(segLen);
+        totalLen += segLen;
+    }
+
+    if (totalLen <= 0.0001) {
+        return points.map((point) => v2.copy(point));
+    }
+
+    const samples: Vec2[] = [];
+    for (let i = 0; i < sampleCount; i++) {
+        const targetLen = (i / (sampleCount - 1)) * totalLen;
+        let walked = 0;
+
+        for (let j = 0; j < segLens.length; j++) {
+            const segLen = segLens[j];
+            if (walked + segLen >= targetLen || j === segLens.length - 1) {
+                const localT = segLen > 0.0001 ? (targetLen - walked) / segLen : 0;
+                samples.push(v2.lerp(localT, points[j], points[j + 1]));
+                break;
+            }
+            walked += segLen;
+        }
+    }
+
+    return samples;
+}
+
 function getObstacleShadowEdgePoints(viewerPos: { x: number; y: number }, obstacle: Obstacle) {
     const col = obstacle.collider;
     if (col.type === collider.Type.Aabb) {
@@ -97,29 +176,49 @@ function getObstacleShadowEdgePoints(viewerPos: { x: number; y: number }, obstac
     ] as const;
 }
 
-function getScreenShadowQuad(
+function getObstacleShadowEdgeSamples(
+    viewerPos: { x: number; y: number },
+    obstacle: Obstacle,
+    sampleCount: number,
+) {
+    const col = obstacle.collider;
+    if (col.type === collider.Type.Aabb) {
+        return samplePolyline(getAabbVisibleEdgePath(viewerPos, col), sampleCount);
+    }
+
+    const [left, right] = getObstacleShadowEdgePoints(viewerPos, obstacle);
+    return samplePolyline([left, right], sampleCount);
+}
+
+function getScreenShadowStrip(
     camera: Camera,
     viewerPos: Vec2,
-    edge0: Vec2,
-    edge1: Vec2,
+    edgePoints: readonly Vec2[],
     shadowLen: number,
+    shadowStart: number,
+    shadowEnd: number,
 ) {
     const viewerScreen = camera.m_pointToScreen(viewerPos);
-    const screen0 = camera.m_pointToScreen(edge0);
-    const screen1 = camera.m_pointToScreen(edge1);
-    const dir0 = v2.sub(screen0, viewerScreen);
-    const dir1 = v2.sub(screen1, viewerScreen);
+    const near: Vec2[] = [];
+    const far: Vec2[] = [];
 
-    if (v2.lengthSqr(dir0) < 0.0001 || v2.lengthSqr(dir1) < 0.0001) {
+    for (let i = 0; i < edgePoints.length; i++) {
+        const screen = camera.m_pointToScreen(edgePoints[i]);
+        const dir = v2.sub(screen, viewerScreen);
+        if (v2.lengthSqr(dir) < 0.0001) {
+            continue;
+        }
+
+        const normDir = v2.normalizeSafe(dir, v2.create(1, 0));
+        near.push(v2.add(screen, v2.mul(normDir, shadowLen * shadowStart)));
+        far.push(v2.add(screen, v2.mul(normDir, shadowLen * shadowEnd)));
+    }
+
+    if (near.length < 2 || far.length < 2) {
         return null;
     }
 
-    return {
-        near0: screen0,
-        near1: screen1,
-        far0: v2.add(screen0, v2.mul(v2.normalizeSafe(dir0, v2.create(1, 0)), shadowLen)),
-        far1: v2.add(screen1, v2.mul(v2.normalizeSafe(dir1, v2.create(1, 0)), shadowLen)),
-    };
+    return { near, far };
 }
 
 export class Renderer {
@@ -232,23 +331,51 @@ export class Renderer {
         return false;
     }
 
-    private drawShadowQuad(
+    private getShadowSampleCount(camera: Camera, edge0: Vec2, edge1: Vec2) {
+        const screen0 = camera.m_pointToScreen(edge0);
+        const screen1 = camera.m_pointToScreen(edge1);
+        const span = v2.distance(screen0, screen1);
+        return math.clamp(
+            Math.round(span / 38),
+            OCCLUSION_MIN_EDGE_SAMPLES,
+            OCCLUSION_MAX_EDGE_SAMPLES,
+        );
+    }
+
+    private getOcclusionBandAlpha(bandIdx: number) {
+        const bandT = (bandIdx + 1) / OCCLUSION_BAND_COUNT;
+        const eased = math.smoothstep(bandT, 0, 1);
+        return math.lerp(eased, 0.05, OCCLUSION_OVERLAY_ALPHA);
+    }
+
+    private drawShadowBand(
         overlay: PIXI.Graphics,
         camera: Camera,
         viewerPos: Vec2,
-        edge0: Vec2,
-        edge1: Vec2,
+        edgePoints: readonly Vec2[],
         shadowLen: number,
+        bandStart: number,
+        bandEnd: number,
     ) {
-        const quad = getScreenShadowQuad(camera, viewerPos, edge0, edge1, shadowLen);
-        if (!quad) {
+        const strip = getScreenShadowStrip(
+            camera,
+            viewerPos,
+            edgePoints,
+            shadowLen,
+            bandStart,
+            bandEnd,
+        );
+        if (!strip) {
             return;
         }
 
-        overlay.moveTo(quad.near0.x, quad.near0.y);
-        overlay.lineTo(quad.near1.x, quad.near1.y);
-        overlay.lineTo(quad.far1.x, quad.far1.y);
-        overlay.lineTo(quad.far0.x, quad.far0.y);
+        overlay.moveTo(strip.near[0].x, strip.near[0].y);
+        for (let i = 1; i < strip.near.length; i++) {
+            overlay.lineTo(strip.near[i].x, strip.near[i].y);
+        }
+        for (let i = strip.far.length - 1; i >= 0; i--) {
+            overlay.lineTo(strip.far[i].x, strip.far[i].y);
+        }
         overlay.closePath();
     }
 
@@ -279,8 +406,6 @@ export class Renderer {
         const obstacles = map.m_obstaclePool.m_getPool();
         const buildings = map.m_buildingPool.m_getPool();
 
-        overlay.beginFill(OCCLUSION_OVERLAY_COLOR, OCCLUSION_OVERLAY_ALPHA);
-
         for (let i = 0; i < obstacles.length; i++) {
             const obstacle = obstacles[i];
             if (!this.isOpaqueVisionBlocker(activePlayer.layer, obstacle)) {
@@ -302,7 +427,30 @@ export class Renderer {
             }
 
             const [leftWorld, rightWorld] = getObstacleShadowEdgePoints(viewerPos, obstacle);
-            this.drawShadowQuad(overlay, camera, viewerPos, leftWorld, rightWorld, shadowLen);
+            const edgeSamples = getObstacleShadowEdgeSamples(
+                viewerPos,
+                obstacle,
+                this.getShadowSampleCount(camera, leftWorld, rightWorld),
+            );
+
+            for (let bandIdx = 0; bandIdx < OCCLUSION_BAND_COUNT; bandIdx++) {
+                const bandStart = bandIdx / OCCLUSION_BAND_COUNT;
+                const bandEnd = (bandIdx + 1) / OCCLUSION_BAND_COUNT;
+                overlay.beginFill(
+                    OCCLUSION_OVERLAY_COLOR,
+                    this.getOcclusionBandAlpha(bandIdx),
+                );
+                this.drawShadowBand(
+                    overlay,
+                    camera,
+                    viewerPos,
+                    edgeSamples,
+                    shadowLen,
+                    bandStart,
+                    bandEnd,
+                );
+                overlay.endFill();
+            }
         }
 
         for (let i = 0; i < buildings.length; i++) {
@@ -332,9 +480,12 @@ export class Renderer {
                 }
 
                 const [leftWorld, rightWorld] = getAabbShadowEdgePoints(viewerPos, zoomIn);
-                this.drawShadowQuad(overlay, camera, viewerPos, leftWorld, rightWorld, shadowLen);
+                const buildingEdgeSamples = samplePolyline(
+                    getAabbVisibleEdgePath(viewerPos, zoomIn),
+                    this.getShadowSampleCount(camera, leftWorld, rightWorld),
+                );
+                const windowEdgeSamples: Vec2[][] = [];
 
-                overlay.beginHole();
                 for (let k = 0; k < obstacles.length; k++) {
                     const obstacle = obstacles[k];
                     if (
@@ -367,20 +518,51 @@ export class Renderer {
                         viewerPos,
                         obstacle,
                     );
-                    this.drawShadowQuad(
+                    windowEdgeSamples.push(
+                        getObstacleShadowEdgeSamples(
+                            viewerPos,
+                            obstacle,
+                            this.getShadowSampleCount(camera, windowLeft, windowRight),
+                        ),
+                    );
+                }
+
+                for (let bandIdx = 0; bandIdx < OCCLUSION_BAND_COUNT; bandIdx++) {
+                    const bandStart = bandIdx / OCCLUSION_BAND_COUNT;
+                    const bandEnd = (bandIdx + 1) / OCCLUSION_BAND_COUNT;
+
+                    overlay.beginFill(
+                        OCCLUSION_OVERLAY_COLOR,
+                        this.getOcclusionBandAlpha(bandIdx),
+                    );
+                    this.drawShadowBand(
                         overlay,
                         camera,
                         viewerPos,
-                        windowLeft,
-                        windowRight,
+                        buildingEdgeSamples,
                         shadowLen,
+                        bandStart,
+                        bandEnd,
                     );
+                    if (windowEdgeSamples.length > 0) {
+                        overlay.beginHole();
+                        for (let k = 0; k < windowEdgeSamples.length; k++) {
+                            this.drawShadowBand(
+                                overlay,
+                                camera,
+                                viewerPos,
+                                windowEdgeSamples[k],
+                                shadowLen,
+                                bandStart,
+                                bandEnd,
+                            );
+                        }
+                        overlay.endHole();
+                    }
+                    overlay.endFill();
                 }
-                overlay.endHole();
             }
         }
-
-        overlay.endFill();
     }
 
     addPIXIObj(obj: PIXI.Container, layer: number, zOrd: number, zIdx?: number) {
