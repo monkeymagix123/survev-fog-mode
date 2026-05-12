@@ -221,7 +221,12 @@ export class Renderer {
     viewerPos: Vec2,
     settings: FogVisibilitySettings,
 ) {
-    const ambient = math.clamp(settings.ambientDarkness ?? 0, 0, 1);
+    const minBrightness = math.clamp(
+        settings.minBrightness ?? (1 - math.clamp(settings.ambientDarkness ?? 1, 0, 1)),
+        0,
+        1,
+    );
+    const maxBrightness = math.clamp(settings.maxBrightness ?? 1, minBrightness, 1);
     const strength = settings.lightStrength ?? 1;
     const falloff = settings.lightFalloff ?? 2;
     const falloffStart = Math.max(0, settings.lightFalloffStart ?? 4);
@@ -236,16 +241,17 @@ export class Renderer {
 
     const getDarkness = (distance: number) => {
         if (distance <= falloffStart) {
-            return 0;
+            return 1 - maxBrightness;
         }
         if (distance >= radius) {
-            return ambient;
+            return 1 - minBrightness;
         }
 
         const fadeT = math.delerp(distance, falloffStart, radius);
         const easedFadeT = math.smoothstep(fadeT, 0, 1);
-        const darknessT = 1 - Math.pow(1 - easedFadeT, Math.max(falloff, 0.01));
-        return ambient * darknessT;
+        const lightFactor = Math.pow(1 - easedFadeT, Math.max(falloff, 0.01));
+        const brightness = minBrightness + (maxBrightness - minBrightness) * lightFactor;
+        return 1 - brightness;
     };
 
     // ---- radial approximation ----
@@ -275,7 +281,7 @@ export class Renderer {
     }
 
     // ---- outside radius: pure ambient fog ----
-    overlay.beginFill(OCCLUSION_OVERLAY_COLOR, ambient);
+    overlay.beginFill(OCCLUSION_OVERLAY_COLOR, 1 - minBrightness);
     overlay.drawRect(0, 0, camera.m_screenWidth, camera.m_screenHeight);
     overlay.beginHole();
     overlay.drawCircle(center.x, center.y, radiusPx);
@@ -339,6 +345,8 @@ export class Renderer {
         const fogModeEnabled = map.mapName.endsWith(FOG_VISIBILITY_MAP_SUFFIX);
         const fogSettings: FogVisibilitySettings = gameLike.m_fogVisibilitySettings ?? {
             ambientDarkness: 1,
+            minBrightness: 0.1,
+            maxBrightness: 0.7,
             lightStrength: 1.15,
             lightFalloff: 2,
             lightFalloffStart: 4,

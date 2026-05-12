@@ -68,6 +68,8 @@ export function getConfig(isProduction: boolean, dir: string) {
             hideObjectsBehindOpaqueObstacles: false,
             fogMode: {
                 ambientDarkness: 1,
+                minBrightness: 0.1,
+                maxBrightness: 0.7,
                 lightStrength: 1.15,
                 lightFalloff: 2,
                 lightFalloffStart: 4,

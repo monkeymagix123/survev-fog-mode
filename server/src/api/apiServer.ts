@@ -89,6 +89,8 @@ export class ApiServer {
                     Config.visibility.hideObjectsBehindOpaqueObstacles,
                 fogMode: {
                     ambientDarkness: Config.visibility.fogMode.ambientDarkness,
+                    minBrightness: Config.visibility.fogMode.minBrightness,
+                    maxBrightness: Config.visibility.fogMode.maxBrightness,
                     lightStrength: Config.visibility.fogMode.lightStrength,
                     lightFalloff: Config.visibility.fogMode.lightFalloff,
                     lightFalloffStart: Config.visibility.fogMode.lightFalloffStart,

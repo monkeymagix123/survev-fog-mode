@@ -59,6 +59,8 @@ export interface Ctx {
 
 export interface FogVisibilitySettings {
     ambientDarkness: number; // A (0 = no ambient darkness, 1 = fully dark world)
+    minBrightness: number; // Minimum brightness far from the player
+    maxBrightness: number; // Maximum brightness near the player
     lightStrength: number;   // S (0–1+ typical)
     lightFalloff: number;    // N (2–4 feels natural)
     lightFalloffStart: number; // Fully lit radius before falloff begins (world units)
@@ -121,6 +123,8 @@ export class Game {
     m_obstacleOcclusionOverlay = false;
     m_fogVisibilitySettings: FogVisibilitySettings = {
         ambientDarkness: 0.9,
+        minBrightness: 0.1,
+        maxBrightness: 0.7,
         lightStrength: 1.15,
         lightFalloff: 2,
         lightFalloffStart: 4,

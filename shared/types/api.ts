@@ -68,6 +68,8 @@ export interface SiteInfoRes {
         hideObjectsBehindOpaqueObstacles: boolean;
         fogMode: {
             ambientDarkness: number;
+            minBrightness: number;
+            maxBrightness: number;
             lightStrength: number;
             lightFalloff: number;
             lightFalloffStart: number;

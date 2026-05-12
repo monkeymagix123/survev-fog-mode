@@ -373,8 +373,18 @@ export interface ConfigType {
             /**
              * Base darkness applied everywhere before the player's light cuts through it.
              * 1 is fully dark, 0 disables the darkness overlay.
+             *
+             * Deprecated in favor of minBrightness/maxBrightness, but kept as a compatibility fallback.
              */
             ambientDarkness: number;
+            /**
+             * Minimum brightness far away from the player.
+             */
+            minBrightness: number;
+            /**
+             * Maximum brightness near the player.
+             */
+            maxBrightness: number;
             /**
              * How strong the player's light is at the source.
              * Higher values let the light punch farther through darkness.

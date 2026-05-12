@@ -119,6 +119,8 @@ export class Application {
                     !!info.visibility?.hideObjectsBehindOpaqueObstacles;
                 this.game.m_fogVisibilitySettings = {
                     ambientDarkness: info.visibility?.fogMode?.ambientDarkness ?? 1,
+                    minBrightness: info.visibility?.fogMode?.minBrightness ?? 0.1,
+                    maxBrightness: info.visibility?.fogMode?.maxBrightness ?? 0.7,
                     lightStrength: info.visibility?.fogMode?.lightStrength ?? 1.15,
                     lightFalloff: info.visibility?.fogMode?.lightFalloff ?? 2,
                     lightFalloffStart: info.visibility?.fogMode?.lightFalloffStart ?? 4,
@@ -386,6 +388,8 @@ export class Application {
                 !!this.siteInfo.info.visibility?.hideObjectsBehindOpaqueObstacles;
             this.game.m_fogVisibilitySettings = {
                 ambientDarkness: this.siteInfo.info.visibility?.fogMode?.ambientDarkness ?? 1,
+                minBrightness: this.siteInfo.info.visibility?.fogMode?.minBrightness ?? 0.1,
+                maxBrightness: this.siteInfo.info.visibility?.fogMode?.maxBrightness ?? 0.7,
                 lightStrength: this.siteInfo.info.visibility?.fogMode?.lightStrength ?? 1.15,
                 lightFalloff: this.siteInfo.info.visibility?.fogMode?.lightFalloff ?? 2,
                 lightFalloffStart: this.siteInfo.info.visibility?.fogMode?.lightFalloffStart ?? 4,
