@@ -45,10 +45,11 @@ type a = {
 const fogConfig = {
     visibility: {
         hideObjectsBehindOpaqueObstacles: true,
+        shadowOverlayAlpha: 0.8,
         fogMode: {
-            ambientDarkness: 1,
-            // lightStrength: 1.15,
-            lightStrength: 5,
+            minBrightness: 0.1,
+            maxBrightness: 0.9,
+            lightStrength: 1.5,
             lightFalloff: 2,
             lightFalloffStart: 4,
             enableShadows: true,
