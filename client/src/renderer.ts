@@ -44,6 +44,8 @@ const OCCLUSION_OVERLAY_ALPHA = 0.5;
 const OCCLUSION_VIEW_MARGIN = 96;
 
 const FOG_LIGHT_BAND_COUNT = 50;
+const FOG_LIGHT_RANGE_PER_STRENGTH = 10;
+const FOG_VISIBILITY_MAP_SUFFIX = "_fog";
 
 interface Edge {
     a: Vec2;
@@ -222,26 +224,28 @@ export class Renderer {
     const ambient = math.clamp(settings.ambientDarkness ?? 0, 0, 1);
     const strength = settings.lightStrength ?? 1;
     const falloff = settings.lightFalloff ?? 2;
-    const radius = Math.max(0.0001, settings.lightRadius ?? 100);
+    const falloffStart = Math.max(0, settings.lightFalloffStart ?? 4);
+    const radius = Math.max(
+        falloffStart + Math.max(0.0001, strength) * FOG_LIGHT_RANGE_PER_STRENGTH,
+        falloffStart + 0.0001,
+    );
 
     const center = camera.m_pointToScreen(viewerPos);
     const radiusPx = camera.m_scaleToScreen(radius);
     const bandCount = FOG_LIGHT_BAND_COUNT;
 
-    // Smoother light attenuation combining an exponential core and power falloff
-    const lightAt = (distance: number) => {
-        const x = distance / radius;
-        const core = Math.exp(-x * x * 6.0);
-        const fall = Math.pow(Math.max(0, 1 - x), falloff);
-        return strength * (core * 0.7 + fall * 0.3);
-    };
-
-    // Darkness function: light proportionally reduces the ambient fog
     const getDarkness = (distance: number) => {
-        // We clamp the light at 1 max to prevent negative darkness artifacts
-        const light = math.clamp(lightAt(distance), 0, 1);
-        const reducedDarkness = ambient * (1 - light);
-        return math.clamp(reducedDarkness, 0, 1);
+        if (distance <= falloffStart) {
+            return 0;
+        }
+        if (distance >= radius) {
+            return ambient;
+        }
+
+        const fadeT = math.delerp(distance, falloffStart, radius);
+        const easedFadeT = math.smoothstep(fadeT, 0, 1);
+        const darknessT = 1 - Math.pow(1 - easedFadeT, Math.max(falloff, 0.01));
+        return ambient * darknessT;
     };
 
     // ---- radial approximation ----
@@ -332,12 +336,12 @@ export class Renderer {
         };
 
         const activePlayer = gameLike.m_activePlayer;
-        const fogModeEnabled = !!gameLike.m_fogVisibilitySettings;
+        const fogModeEnabled = map.mapName.endsWith(FOG_VISIBILITY_MAP_SUFFIX);
         const fogSettings: FogVisibilitySettings = gameLike.m_fogVisibilitySettings ?? {
             ambientDarkness: 1,
             lightStrength: 1.15,
             lightFalloff: 2,
-            lightRadius: 100,
+            lightFalloffStart: 4,
             enableShadows: true,
         };
 
@@ -352,9 +356,9 @@ export class Renderer {
 
         overlay.visible = true;
 
-        // if (fogModeEnabled) {
-        //     this.drawFogLightOverlay(overlay, camera, camera.m_pos, fogSettings);
-        // }
+        if (fogModeEnabled) {
+            this.drawFogLightOverlay(overlay, camera, camera.m_pos, fogSettings);
+        }
 
         if (!shadowsEnabled) return;
 
