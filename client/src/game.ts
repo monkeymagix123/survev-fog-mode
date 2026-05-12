@@ -110,6 +110,7 @@ export class Game {
     m_targetZoom!: number;
     m_debugZoom!: number;
     m_useDebugZoom!: boolean;
+    m_obstacleOcclusionOverlay = false;
 
     editor!: Editor;
     debugHUD!: DebugHUD;
@@ -303,6 +304,7 @@ export class Game {
             this.m_renderer.layers[1],
             this.m_renderer.layers[2],
             this.m_renderer.layers[3],
+            this.m_renderer.visionOverlay,
             this.m_debugDisplay,
             this.m_gas.gasRenderer.display,
             this.m_touch.container,

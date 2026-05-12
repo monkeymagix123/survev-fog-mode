@@ -84,6 +84,10 @@ export class ApiServer {
             gitRevision: GIT_VERSION,
             captchaEnabled: this.captchaEnabled,
             clientTheme: this.clientTheme,
+            visibility: {
+                hideObjectsBehindOpaqueObstacles:
+                    Config.visibility.hideObjectsBehindOpaqueObstacles,
+            },
         };
 
         for (const region in this.regions) {

@@ -105,6 +105,7 @@ export class LoadoutDisplay {
             this.renderer.layers[1],
             this.renderer.layers[2],
             this.renderer.layers[3],
+            this.renderer.visionOverlay,
             this.debugDisplay,
         ];
         for (let i = 0; i < pixiContainers.length; i++) {

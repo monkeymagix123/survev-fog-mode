@@ -10,6 +10,7 @@ import type { Localization } from "./ui/localization";
 export class SiteInfo {
     info = {} as SiteInfoRes;
     loaded = false;
+    onUpdatedListeners: Array<(info: SiteInfoRes) => void> = [];
 
     constructor(
         public config: ConfigManager,
@@ -38,7 +39,14 @@ export class SiteInfo {
             this.info = data || {};
             this.loaded = true;
             this.updatePageFromInfo();
+            for (let i = 0; i < this.onUpdatedListeners.length; i++) {
+                this.onUpdatedListeners[i](this.info);
+            }
         });
+    }
+
+    addUpdatedListener(listener: (info: SiteInfoRes) => void) {
+        this.onUpdatedListeners.push(listener);
     }
 
     getGameModeStyles() {

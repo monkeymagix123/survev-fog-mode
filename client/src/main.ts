@@ -113,6 +113,12 @@ export class Application {
             this.errorModal,
         );
         this.siteInfo = new SiteInfo(this.config, this.localization);
+        this.siteInfo.addUpdatedListener((info) => {
+            if (this.game) {
+                this.game.m_obstacleOcclusionOverlay =
+                    !!info.visibility?.hideObjectsBehindOpaqueObstacles;
+            }
+        });
 
         this.teamMenu = new TeamMenu(
             this.config,
@@ -369,6 +375,8 @@ export class Application {
                 onJoin,
                 onQuit,
             );
+            this.game.m_obstacleOcclusionOverlay =
+                !!this.siteInfo.info.visibility?.hideObjectsBehindOpaqueObstacles;
             this.loadoutDisplay = new LoadoutDisplay(
                 this.pixi,
                 this.audioManager,

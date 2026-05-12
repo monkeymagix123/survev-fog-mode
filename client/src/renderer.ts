@@ -1,10 +1,16 @@
 import * as PIXI from "pixi.js-legacy";
+import { MapObjectDefs } from "../../shared/defs/mapObjectDefs";
+import type { ObstacleDef } from "../../shared/defs/mapObjectsTyping";
+import type { AABB, Collider } from "../../shared/utils/coldet";
 import { Constants } from "../../shared/net/net";
+import { collider } from "../../shared/utils/collider";
+import { util } from "../../shared/utils/util";
 import { v2 } from "../../shared/utils/v2";
 import type { Camera } from "./camera";
 import { errorLogManager } from "./errorLogs";
 import type { Game } from "./game";
 import type { Map } from "./map";
+import type { Obstacle } from "./objects/obstacle";
 
 //
 // Helpers
@@ -33,6 +39,63 @@ function drawRect(gfx: PIXI.Graphics, x: number, y: number, w: number, h: number
     gfx.closePath();
 }
 
+const OCCLUSION_ALPHA_THRESHOLD = 0.95;
+const OCCLUSION_OVERLAY_ALPHA = 0.55;
+const OCCLUSION_OVERLAY_COLOR = 0x060606;
+const OCCLUSION_VIEW_MARGIN = 96;
+
+function getColliderCenter(col: Collider) {
+    return col.type === collider.Type.Aabb
+        ? v2.mul(v2.add(col.min, col.max), 0.5)
+        : col.pos;
+}
+
+function getAabbShadowEdgePoints(viewerPos: { x: number; y: number }, col: AABB) {
+    const center = getColliderCenter(col);
+    const dir = v2.normalizeSafe(v2.sub(center, viewerPos), v2.create(1, 0));
+    const perp = v2.perp(dir);
+    const corners = [
+        v2.create(col.min.x, col.min.y),
+        v2.create(col.min.x, col.max.y),
+        v2.create(col.max.x, col.min.y),
+        v2.create(col.max.x, col.max.y),
+    ];
+
+    let left = corners[0];
+    let right = corners[0];
+    let leftProj = -Infinity;
+    let rightProj = Infinity;
+
+    for (let i = 0; i < corners.length; i++) {
+        const corner = corners[i];
+        const proj = v2.dot(v2.sub(corner, viewerPos), perp);
+        if (proj > leftProj) {
+            leftProj = proj;
+            left = corner;
+        }
+        if (proj < rightProj) {
+            rightProj = proj;
+            right = corner;
+        }
+    }
+
+    return [left, right] as const;
+}
+
+function getObstacleShadowEdgePoints(viewerPos: { x: number; y: number }, obstacle: Obstacle) {
+    const col = obstacle.collider;
+    if (col.type === collider.Type.Aabb) {
+        return getAabbShadowEdgePoints(viewerPos, col);
+    }
+
+    const dir = v2.normalizeSafe(v2.sub(col.pos, viewerPos), v2.create(1, 0));
+    const perp = v2.perp(dir);
+    return [
+        v2.add(col.pos, v2.mul(perp, col.rad)),
+        v2.sub(col.pos, v2.mul(perp, col.rad)),
+    ] as const;
+}
+
 export class Renderer {
     zIdx = 0;
     layer = 0;
@@ -42,6 +105,7 @@ export class Renderer {
     layers: RenderGroup[] = [];
 
     ground = new PIXI.Graphics();
+    visionOverlay = new PIXI.Graphics();
     layerMask = createLayerMask();
     debugLayerMask = null as null | PIXI.Graphics;
     layerMaskDirty = true;
@@ -58,8 +122,111 @@ export class Renderer {
     }
 
     m_free() {
+        this.visionOverlay.parent?.removeChild(this.visionOverlay);
+        this.visionOverlay.destroy(true);
         this.layerMask.parent?.removeChild(this.layerMask);
         this.layerMask.destroy(true);
+    }
+
+    private isOpaqueVisionBlocker(viewerLayer: number, obstacle: Obstacle) {
+        if (
+            !obstacle.active ||
+            obstacle.dead ||
+            !obstacle.collidable ||
+            obstacle.isSkin ||
+            !util.sameLayer(viewerLayer, obstacle.layer)
+        ) {
+            return false;
+        }
+
+        const def = MapObjectDefs[obstacle.type] as ObstacleDef;
+        const alpha = def.img.alpha ?? 1;
+
+        return (
+            !obstacle.isWindow &&
+            !obstacle.isBush &&
+            def.material !== "glass" &&
+            obstacle.height > 0.25 &&
+            alpha >= OCCLUSION_ALPHA_THRESHOLD
+        );
+    }
+
+    private redrawVisionOverlay(camera: Camera, map: Map) {
+        const overlay = this.visionOverlay;
+        overlay.clear();
+
+        const gameLike = this.game as {
+            m_activePlayer?: {
+                layer: number;
+            };
+            m_obstacleOcclusionOverlay?: boolean;
+        };
+
+        const activePlayer = gameLike.m_activePlayer;
+        const enabled = gameLike.m_obstacleOcclusionOverlay;
+
+        if (!enabled || !activePlayer || !map.mapLoaded) {
+            overlay.visible = false;
+            return;
+        }
+
+        overlay.visible = true;
+
+        const viewerPos = camera.m_pos;
+        const viewerScreen = camera.m_pointToScreen(viewerPos);
+        const shadowLen =
+            Math.hypot(camera.m_screenWidth, camera.m_screenHeight) + OCCLUSION_VIEW_MARGIN * 2;
+        const obstacles = map.m_obstaclePool.m_getPool();
+
+        overlay.beginFill(OCCLUSION_OVERLAY_COLOR, OCCLUSION_OVERLAY_ALPHA);
+
+        for (let i = 0; i < obstacles.length; i++) {
+            const obstacle = obstacles[i];
+            if (!this.isOpaqueVisionBlocker(activePlayer.layer, obstacle)) {
+                continue;
+            }
+
+            if (collider.intersectCircle(obstacle.collider, viewerPos, 0.05)) {
+                continue;
+            }
+
+            const centerScreen = camera.m_pointToScreen(getColliderCenter(obstacle.collider));
+            if (
+                centerScreen.x < -OCCLUSION_VIEW_MARGIN ||
+                centerScreen.x > camera.m_screenWidth + OCCLUSION_VIEW_MARGIN ||
+                centerScreen.y < -OCCLUSION_VIEW_MARGIN ||
+                centerScreen.y > camera.m_screenHeight + OCCLUSION_VIEW_MARGIN
+            ) {
+                continue;
+            }
+
+            const [leftWorld, rightWorld] = getObstacleShadowEdgePoints(viewerPos, obstacle);
+            const leftScreen = camera.m_pointToScreen(leftWorld);
+            const rightScreen = camera.m_pointToScreen(rightWorld);
+            const leftDir = v2.sub(leftScreen, viewerScreen);
+            const rightDir = v2.sub(rightScreen, viewerScreen);
+
+            if (v2.lengthSqr(leftDir) < 0.0001 || v2.lengthSqr(rightDir) < 0.0001) {
+                continue;
+            }
+
+            const farLeft = v2.add(
+                leftScreen,
+                v2.mul(v2.normalizeSafe(leftDir, v2.create(1, 0)), shadowLen),
+            );
+            const farRight = v2.add(
+                rightScreen,
+                v2.mul(v2.normalizeSafe(rightDir, v2.create(1, 0)), shadowLen),
+            );
+
+            overlay.moveTo(leftScreen.x, leftScreen.y);
+            overlay.lineTo(rightScreen.x, rightScreen.y);
+            overlay.lineTo(farRight.x, farRight.y);
+            overlay.lineTo(farLeft.x, farLeft.y);
+            overlay.closePath();
+        }
+
+        overlay.endFill();
     }
 
     addPIXIObj(obj: PIXI.Container, layer: number, zOrd: number, zIdx?: number) {
@@ -236,6 +403,7 @@ export class Renderer {
 
         // Set stairs mask
         this.redrawLayerMask(camera, map);
+        this.redrawVisionOverlay(camera, map);
 
         const maskActive = this.layer == 0;
         if (maskActive && !this.layerMaskActive) {
