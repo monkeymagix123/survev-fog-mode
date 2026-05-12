@@ -117,6 +117,7 @@ export class Application {
             if (this.game) {
                 this.game.m_obstacleOcclusionOverlay =
                     !!info.visibility?.hideObjectsBehindOpaqueObstacles;
+                this.game.m_shadowOverlayAlpha = info.visibility?.shadowOverlayAlpha ?? 0.5;
                 this.game.m_fogVisibilitySettings = {
                     ambientDarkness: info.visibility?.fogMode?.ambientDarkness ?? 1,
                     minBrightness: info.visibility?.fogMode?.minBrightness ?? 0.1,
@@ -386,6 +387,8 @@ export class Application {
             );
             this.game.m_obstacleOcclusionOverlay =
                 !!this.siteInfo.info.visibility?.hideObjectsBehindOpaqueObstacles;
+            this.game.m_shadowOverlayAlpha =
+                this.siteInfo.info.visibility?.shadowOverlayAlpha ?? 0.5;
             this.game.m_fogVisibilitySettings = {
                 ambientDarkness: this.siteInfo.info.visibility?.fogMode?.ambientDarkness ?? 1,
                 minBrightness: this.siteInfo.info.visibility?.fogMode?.minBrightness ?? 0.1,

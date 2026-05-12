@@ -66,6 +66,7 @@ export interface SiteInfoRes {
     captchaEnabled: boolean;
     visibility: {
         hideObjectsBehindOpaqueObstacles: boolean;
+        shadowOverlayAlpha: number;
         fogMode: {
             ambientDarkness: number;
             minBrightness: number;

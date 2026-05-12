@@ -40,7 +40,6 @@ function drawRect(gfx: PIXI.Graphics, x: number, y: number, w: number, h: number
 
 const OCCLUSION_ALPHA_THRESHOLD = 0.95;
 const OCCLUSION_OVERLAY_COLOR = 0x060606;
-const OCCLUSION_OVERLAY_ALPHA = 0.5;
 const OCCLUSION_VIEW_MARGIN = 96;
 
 const FOG_LIGHT_BAND_COUNT = 50;
@@ -295,11 +294,12 @@ export class Renderer {
         viewerPos: Vec2,
         shadowLen: number,
         obstacle: Obstacle,
+        shadowOverlayAlpha: number,
     ): void {
         const edges = obstacleToShadowEdges(viewerPos, obstacle);
         if (edges.length === 0) return;
 
-        overlay.beginFill(OCCLUSION_OVERLAY_COLOR, OCCLUSION_OVERLAY_ALPHA);
+        overlay.beginFill(OCCLUSION_OVERLAY_COLOR, shadowOverlayAlpha);
         for (const edge of edges) {
             drawEdgeShadow(overlay, camera, viewerPos, edge, shadowLen);
         }
@@ -313,11 +313,12 @@ export class Renderer {
         shadowLen: number,
         zoomIn: AABB,
         windowEdges: Edge[],
+        shadowOverlayAlpha: number,
     ): void {
         const edges = aabbToShadowEdges(viewerPos, zoomIn);
         if (edges.length === 0) return;
 
-        overlay.beginFill(OCCLUSION_OVERLAY_COLOR, OCCLUSION_OVERLAY_ALPHA);
+        overlay.beginFill(OCCLUSION_OVERLAY_COLOR, shadowOverlayAlpha);
         for (const edge of edges) {
             drawEdgeShadow(overlay, camera, viewerPos, edge, shadowLen);
         }
@@ -338,10 +339,12 @@ export class Renderer {
         const gameLike = this.game as {
             m_activePlayer?: { layer: number };
             m_obstacleOcclusionOverlay?: boolean;
+            m_shadowOverlayAlpha?: number;
             m_fogVisibilitySettings?: FogVisibilitySettings;
         };
 
         const activePlayer = gameLike.m_activePlayer;
+        const shadowOverlayAlpha = math.clamp(gameLike.m_shadowOverlayAlpha ?? 0.5, 0, 1);
         const fogModeEnabled = map.mapName.endsWith(FOG_VISIBILITY_MAP_SUFFIX);
         const fogSettings: FogVisibilitySettings = gameLike.m_fogVisibilitySettings ?? {
             ambientDarkness: 1,
@@ -394,7 +397,14 @@ export class Renderer {
                 continue;
             }
 
-            this.drawObstacleShadows(overlay, camera, viewerPos, shadowLen, obstacle);
+            this.drawObstacleShadows(
+                overlay,
+                camera,
+                viewerPos,
+                shadowLen,
+                obstacle,
+                shadowOverlayAlpha,
+            );
         }
 
         // --- Building shadows -------------------------------------------------
@@ -456,6 +466,7 @@ export class Renderer {
                     shadowLen,
                     zoomIn,
                     windowEdges,
+                    shadowOverlayAlpha,
                 );
             }
         }

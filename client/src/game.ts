@@ -121,6 +121,7 @@ export class Game {
     m_debugZoom!: number;
     m_useDebugZoom!: boolean;
     m_obstacleOcclusionOverlay = false;
+    m_shadowOverlayAlpha = 0.5;
     m_fogVisibilitySettings: FogVisibilitySettings = {
         ambientDarkness: 0.9,
         minBrightness: 0.1,

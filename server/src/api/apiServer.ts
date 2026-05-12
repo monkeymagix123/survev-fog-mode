@@ -87,6 +87,7 @@ export class ApiServer {
             visibility: {
                 hideObjectsBehindOpaqueObstacles:
                     Config.visibility.hideObjectsBehindOpaqueObstacles,
+                shadowOverlayAlpha: Config.visibility.shadowOverlayAlpha,
                 fogMode: {
                     ambientDarkness: Config.visibility.fogMode.ambientDarkness,
                     minBrightness: Config.visibility.fogMode.minBrightness,

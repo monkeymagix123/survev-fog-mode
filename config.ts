@@ -66,6 +66,7 @@ export function getConfig(isProduction: boolean, dir: string) {
         uniqueInGameNames: true,
         visibility: {
             hideObjectsBehindOpaqueObstacles: false,
+            shadowOverlayAlpha: 0.5,
             fogMode: {
                 ambientDarkness: 1,
                 minBrightness: 0.1,

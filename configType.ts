@@ -367,6 +367,11 @@ export interface ConfigType {
          */
         hideObjectsBehindOpaqueObstacles: boolean;
         /**
+         * Opacity of the opaque obstacle/building shadow overlay.
+         * Lower values make blocker shadows lighter; higher values make them darker.
+         */
+        shadowOverlayAlpha: number;
+        /**
          * Darkness-mode settings used by fog maps such as "main_fog".
          */
         fogMode: {
