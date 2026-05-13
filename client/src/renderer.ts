@@ -42,7 +42,6 @@ const OCCLUSION_ALPHA_THRESHOLD = 0.95;
 const OCCLUSION_OVERLAY_COLOR = 0x060606;
 const OCCLUSION_VIEW_MARGIN = 96;
 
-const FOG_LIGHT_BAND_COUNT = 50;
 const FOG_LIGHT_RANGE_PER_STRENGTH = 10;
 const FOG_VISIBILITY_MAP_SUFFIX = "_fog";
 
@@ -137,7 +136,12 @@ export class Renderer {
     layers: RenderGroup[] = [];
 
     ground = new PIXI.Graphics();
-    visionOverlay = new PIXI.Graphics();
+    visionOverlay = new PIXI.Container();
+    visionFogSprite = new PIXI.Sprite();
+    visionShadowOverlay = new PIXI.Graphics();
+    visionFogCanvas = document.createElement("canvas");
+    visionFogContext = this.visionFogCanvas.getContext("2d");
+    visionFogTexture = PIXI.Texture.from(this.visionFogCanvas);
     layerMask = createLayerMask();
     debugLayerMask = null as null | PIXI.Graphics;
     layerMaskDirty = true;
@@ -151,11 +155,16 @@ export class Renderer {
             this.layers.push(new RenderGroup(`layer_${i}`));
         }
         this.ground.alpha = 0;
+        this.visionFogSprite.texture = this.visionFogTexture;
+        this.visionFogSprite.position.set(0, 0);
+        this.visionFogSprite.visible = false;
+        this.visionOverlay.addChild(this.visionFogSprite, this.visionShadowOverlay);
     }
 
     m_free() {
         this.visionOverlay.parent?.removeChild(this.visionOverlay);
         this.visionOverlay.destroy(true);
+        this.visionFogTexture.destroy(true);
         this.layerMask.parent?.removeChild(this.layerMask);
         this.layerMask.destroy(true);
     }
@@ -214,79 +223,76 @@ export class Renderer {
         );
     }
 
-   private drawFogLightOverlay(
-    overlay: PIXI.Graphics,
-    camera: Camera,
-    viewerPos: Vec2,
-    settings: FogVisibilitySettings,
-) {
-    const minBrightness = math.clamp(
-        settings.minBrightness ?? (1 - math.clamp(settings.ambientDarkness ?? 1, 0, 1)),
-        0,
-        1,
-    );
-    const maxBrightness = math.clamp(settings.maxBrightness ?? 1, minBrightness, 1);
-    const strength = settings.lightStrength ?? 1;
-    const falloff = settings.lightFalloff ?? 2;
-    const falloffStart = Math.max(0, settings.lightFalloffStart ?? 4);
-    const radius = Math.max(
-        falloffStart + Math.max(0.0001, strength) * FOG_LIGHT_RANGE_PER_STRENGTH,
-        falloffStart + 0.0001,
-    );
-
-    const center = camera.m_pointToScreen(viewerPos);
-    const radiusPx = camera.m_scaleToScreen(radius);
-    const bandCount = FOG_LIGHT_BAND_COUNT;
-
-    const getDarkness = (distance: number) => {
-        if (distance <= falloffStart) {
-            return 1 - maxBrightness;
-        }
-        if (distance >= radius) {
-            return 1 - minBrightness;
+    private drawFogLightOverlay(
+        camera: Camera,
+        viewerPos: Vec2,
+        settings: FogVisibilitySettings,
+    ) {
+        const ctx = this.visionFogContext;
+        if (!ctx) {
+            this.visionFogSprite.visible = false;
+            return;
         }
 
-        const fadeT = math.delerp(distance, falloffStart, radius);
-        const easedFadeT = math.smoothstep(fadeT, 0, 1);
-        const lightFactor = Math.pow(1 - easedFadeT, Math.max(falloff, 0.01));
-        const brightness = minBrightness + (maxBrightness - minBrightness) * lightFactor;
-        return 1 - brightness;
-    };
-
-    // ---- radial approximation ----
-    for (let i = 0; i < bandCount; i++) {
-        const innerT = i / bandCount;
-        const outerT = (i + 1) / bandCount;
-        const midT = (innerT + outerT) * 0.5;
-        
-        const d = midT * radius;
-        const darkness = getDarkness(d);
-        const alpha = darkness;
-
-        if (alpha <= 0.001) continue;
-
-        const innerR = innerT * radiusPx;
-        const outerR = outerT * radiusPx;
-
-        overlay.beginFill(OCCLUSION_OVERLAY_COLOR, alpha);
-        overlay.drawCircle(center.x, center.y, outerR);
-        
-        if (innerR > 0.5) {
-            overlay.beginHole();
-            overlay.drawCircle(center.x, center.y, innerR);
-            overlay.endHole();
+        const width = Math.max(1, Math.ceil(camera.m_screenWidth));
+        const height = Math.max(1, Math.ceil(camera.m_screenHeight));
+        if (this.visionFogCanvas.width !== width || this.visionFogCanvas.height !== height) {
+            this.visionFogCanvas.width = width;
+            this.visionFogCanvas.height = height;
+            this.visionFogTexture.update();
         }
-        overlay.endFill();
+
+        const minBrightness = math.clamp(
+            settings.minBrightness ?? (1 - math.clamp(settings.ambientDarkness ?? 1, 0, 1)),
+            0,
+            1,
+        );
+        const maxBrightness = math.clamp(settings.maxBrightness ?? 1, minBrightness, 1);
+        const strength = settings.lightStrength ?? 1;
+        const falloff = Math.max(settings.lightFalloff ?? 2, 0.01);
+        const falloffStart = Math.max(0, settings.lightFalloffStart ?? 4);
+        const radius = Math.max(
+            falloffStart + Math.max(0.0001, strength) * FOG_LIGHT_RANGE_PER_STRENGTH,
+            falloffStart + 0.0001,
+        );
+
+        const center = camera.m_pointToScreen(viewerPos);
+        const innerRadiusPx = camera.m_scaleToScreen(falloffStart);
+        const outerRadiusPx = camera.m_scaleToScreen(radius);
+        const innerDarkness = 1 - maxBrightness;
+        const outerDarkness = 1 - minBrightness;
+
+        const gradient = ctx.createRadialGradient(
+            center.x,
+            center.y,
+            innerRadiusPx,
+            center.x,
+            center.y,
+            outerRadiusPx,
+        );
+        gradient.addColorStop(0, `rgba(6, 6, 6, ${innerDarkness})`);
+
+        const stopCount = 12;
+        for (let i = 1; i < stopCount; i++) {
+            const t = i / stopCount;
+            const darknessT = 1 - Math.pow(1 - t, falloff);
+            const alpha = innerDarkness + (outerDarkness - innerDarkness) * darknessT;
+            gradient.addColorStop(t, `rgba(6, 6, 6, ${alpha})`);
+        }
+
+        gradient.addColorStop(1, `rgba(6, 6, 6, ${outerDarkness})`);
+
+        ctx.clearRect(0, 0, width, height);
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, width, height);
+
+        this.visionFogTexture.update();
+        this.visionFogSprite.visible = true;
+        this.visionFogSprite.texture = this.visionFogTexture;
+        this.visionFogSprite.position.set(0, 0);
+        this.visionFogSprite.width = width;
+        this.visionFogSprite.height = height;
     }
-
-    // ---- outside radius: pure ambient fog ----
-    overlay.beginFill(OCCLUSION_OVERLAY_COLOR, 1 - minBrightness);
-    overlay.drawRect(0, 0, camera.m_screenWidth, camera.m_screenHeight);
-    overlay.beginHole();
-    overlay.drawCircle(center.x, center.y, radiusPx);
-    overlay.endHole();
-    overlay.endFill();
-}
 
     private drawObstacleShadows(
         overlay: PIXI.Graphics,
@@ -333,7 +339,7 @@ export class Renderer {
     }
 
     private redrawVisionOverlay(camera: Camera, map: Map) {
-        const overlay = this.visionOverlay;
+        const overlay = this.visionShadowOverlay;
         overlay.clear();
 
         const gameLike = this.game as {
@@ -361,14 +367,16 @@ export class Renderer {
             (fogModeEnabled && fogSettings.enableShadows);
 
         if ((!shadowsEnabled && !fogModeEnabled) || !activePlayer || !map.mapLoaded) {
-            overlay.visible = false;
+            this.visionOverlay.visible = false;
+            this.visionFogSprite.visible = false;
             return;
         }
 
-        overlay.visible = true;
+        this.visionOverlay.visible = true;
+        this.visionFogSprite.visible = false;
 
         if (fogModeEnabled) {
-            this.drawFogLightOverlay(overlay, camera, camera.m_pos, fogSettings);
+            this.drawFogLightOverlay(camera, camera.m_pos, fogSettings);
         }
 
         if (!shadowsEnabled) return;
