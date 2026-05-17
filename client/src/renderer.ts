@@ -1,8 +1,8 @@
 import * as PIXI from "pixi.js-legacy";
 import { MapObjectDefs } from "../../shared/defs/mapObjectDefs";
 import type { ObstacleDef } from "../../shared/defs/mapObjectsTyping";
-import { coldet, type AABB, type Collider } from "../../shared/utils/coldet";
 import { Constants } from "../../shared/net/net";
+import { type AABB, type Collider, coldet } from "../../shared/utils/coldet";
 import { collider } from "../../shared/utils/collider";
 import { math } from "../../shared/utils/math";
 import { util } from "../../shared/utils/util";
@@ -71,13 +71,29 @@ function aabbToShadowEdges(viewerPos: Vec2, col: AABB): Edge[] {
     // Four AABB edges with their outward normals (CCW winding → normal is left of b-a)
     const candidates: Array<{ a: Vec2; b: Vec2; normal: Vec2 }> = [
         // Bottom  (normal -Y)
-        { a: v2.create(max.x, min.y), b: v2.create(min.x, min.y), normal: v2.create(0, -1) },
+        {
+            a: v2.create(max.x, min.y),
+            b: v2.create(min.x, min.y),
+            normal: v2.create(0, -1),
+        },
         // Left    (normal -X)
-        { a: v2.create(min.x, min.y), b: v2.create(min.x, max.y), normal: v2.create(-1, 0) },
+        {
+            a: v2.create(min.x, min.y),
+            b: v2.create(min.x, max.y),
+            normal: v2.create(-1, 0),
+        },
         // Top     (normal +Y)
-        { a: v2.create(min.x, max.y), b: v2.create(max.x, max.y), normal: v2.create(0, 1) },
+        {
+            a: v2.create(min.x, max.y),
+            b: v2.create(max.x, max.y),
+            normal: v2.create(0, 1),
+        },
         // Right   (normal +X)
-        { a: v2.create(max.x, max.y), b: v2.create(max.x, min.y), normal: v2.create(1, 0) },
+        {
+            a: v2.create(max.x, max.y),
+            b: v2.create(max.x, min.y),
+            normal: v2.create(1, 0),
+        },
     ];
 
     const facing: Edge[] = [];
@@ -219,7 +235,8 @@ export class Renderer {
         }
         const maxDist = obstacle.collider.rad + tol;
         return (
-            v2.lengthSqr(v2.sub(boundaryPoint, obstacle.collider.pos)) <= maxDist * maxDist
+            v2.lengthSqr(v2.sub(boundaryPoint, obstacle.collider.pos)) <=
+            maxDist * maxDist
         );
     }
 
@@ -236,14 +253,17 @@ export class Renderer {
 
         const width = Math.max(1, Math.ceil(camera.m_screenWidth));
         const height = Math.max(1, Math.ceil(camera.m_screenHeight));
-        if (this.visionFogCanvas.width !== width || this.visionFogCanvas.height !== height) {
+        if (
+            this.visionFogCanvas.width !== width ||
+            this.visionFogCanvas.height !== height
+        ) {
             this.visionFogCanvas.width = width;
             this.visionFogCanvas.height = height;
             this.visionFogTexture.update();
         }
 
         const minBrightness = math.clamp(
-            settings.minBrightness ?? (1 - math.clamp(settings.ambientDarkness ?? 1, 0, 1)),
+            settings.minBrightness ?? 1 - math.clamp(settings.ambientDarkness ?? 1, 0, 1),
             0,
             1,
         );
@@ -395,7 +415,9 @@ export class Renderer {
             if (!this.isOpaqueVisionBlocker(activePlayer.layer, obstacle)) continue;
             if (collider.intersectCircle(obstacle.collider, viewerPos, 0.05)) continue;
 
-            const centerScreen = camera.m_pointToScreen(getColliderCenter(obstacle.collider));
+            const centerScreen = camera.m_pointToScreen(
+                getColliderCenter(obstacle.collider),
+            );
             if (
                 centerScreen.x < -OCCLUSION_VIEW_MARGIN ||
                 centerScreen.x > camera.m_screenWidth + OCCLUSION_VIEW_MARGIN ||
@@ -450,11 +472,18 @@ export class Renderer {
                     const windowProbe = v2.add(
                         windowCenter,
                         v2.mul(
-                            v2.normalizeSafe(v2.sub(windowCenter, viewerPos), v2.create(1, 0)),
+                            v2.normalizeSafe(
+                                v2.sub(windowCenter, viewerPos),
+                                v2.create(1, 0),
+                            ),
                             8,
                         ),
                     );
-                    const boundaryHit = collider.intersectSegment(zoomIn, viewerPos, windowProbe);
+                    const boundaryHit = collider.intersectSegment(
+                        zoomIn,
+                        viewerPos,
+                        windowProbe,
+                    );
                     if (
                         !boundaryHit ||
                         !this.boundaryUsesBuildingWindow(boundaryHit.point, obstacle)

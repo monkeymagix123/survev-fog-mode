@@ -61,8 +61,8 @@ export interface FogVisibilitySettings {
     ambientDarkness: number; // A (0 = no ambient darkness, 1 = fully dark world)
     minBrightness: number; // Minimum brightness far from the player
     maxBrightness: number; // Maximum brightness near the player
-    lightStrength: number;   // S (0–1+ typical)
-    lightFalloff: number;    // N (2–4 feels natural)
+    lightStrength: number; // S (0–1+ typical)
+    lightFalloff: number; // N (2–4 feels natural)
     lightFalloffStart: number; // Fully lit radius before falloff begins (world units)
     enableShadows: boolean;
 }

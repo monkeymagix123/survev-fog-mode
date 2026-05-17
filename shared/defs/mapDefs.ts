@@ -1,7 +1,6 @@
 import type { Vec2 } from "../utils/v2";
 import type { RoleDef } from "./gameObjects/roleDefs";
 import { Main } from "./maps/baseDefs";
-import { MainFog } from "./maps/mainFogDefs";
 import { Beach } from "./maps/beachDefs";
 import { Birthday } from "./maps/birthdayDefs";
 import { Cobalt } from "./maps/cobaltDefs";
@@ -9,6 +8,7 @@ import { Desert } from "./maps/desertDefs";
 import { Faction } from "./maps/factionDefs";
 import { factionPotato } from "./maps/factionPotatoDefs";
 import { Halloween } from "./maps/halloweenDefs";
+import { MainFog } from "./maps/mainFogDefs";
 import { MainSpring } from "./maps/mainSpringDefs";
 import { MainSummer } from "./maps/mainSummerDefs";
 import { Potato } from "./maps/potatoDefs";

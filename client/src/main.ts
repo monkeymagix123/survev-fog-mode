@@ -117,7 +117,8 @@ export class Application {
             if (this.game) {
                 this.game.m_obstacleOcclusionOverlay =
                     !!info.visibility?.hideObjectsBehindOpaqueObstacles;
-                this.game.m_shadowOverlayAlpha = info.visibility?.shadowOverlayAlpha ?? 0.5;
+                this.game.m_shadowOverlayAlpha =
+                    info.visibility?.shadowOverlayAlpha ?? 0.5;
                 this.game.m_fogVisibilitySettings = {
                     ambientDarkness: info.visibility?.fogMode?.ambientDarkness ?? 1,
                     minBrightness: info.visibility?.fogMode?.minBrightness ?? 0.1,
@@ -390,13 +391,19 @@ export class Application {
             this.game.m_shadowOverlayAlpha =
                 this.siteInfo.info.visibility?.shadowOverlayAlpha ?? 0.5;
             this.game.m_fogVisibilitySettings = {
-                ambientDarkness: this.siteInfo.info.visibility?.fogMode?.ambientDarkness ?? 1,
-                minBrightness: this.siteInfo.info.visibility?.fogMode?.minBrightness ?? 0.1,
-                maxBrightness: this.siteInfo.info.visibility?.fogMode?.maxBrightness ?? 0.7,
-                lightStrength: this.siteInfo.info.visibility?.fogMode?.lightStrength ?? 1.15,
+                ambientDarkness:
+                    this.siteInfo.info.visibility?.fogMode?.ambientDarkness ?? 1,
+                minBrightness:
+                    this.siteInfo.info.visibility?.fogMode?.minBrightness ?? 0.1,
+                maxBrightness:
+                    this.siteInfo.info.visibility?.fogMode?.maxBrightness ?? 0.7,
+                lightStrength:
+                    this.siteInfo.info.visibility?.fogMode?.lightStrength ?? 1.15,
                 lightFalloff: this.siteInfo.info.visibility?.fogMode?.lightFalloff ?? 2,
-                lightFalloffStart: this.siteInfo.info.visibility?.fogMode?.lightFalloffStart ?? 4,
-                enableShadows: this.siteInfo.info.visibility?.fogMode?.enableShadows ?? true,
+                lightFalloffStart:
+                    this.siteInfo.info.visibility?.fogMode?.lightFalloffStart ?? 4,
+                enableShadows:
+                    this.siteInfo.info.visibility?.fogMode?.enableShadows ?? true,
             };
             this.loadoutDisplay = new LoadoutDisplay(
                 this.pixi,
