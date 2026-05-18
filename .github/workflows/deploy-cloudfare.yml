@@ -1,4 +1,4 @@
-name: Deploy offline version of the PR to Cloudflare Pages
+name: Deploy offline version of the PR to Cloudflare Pages (original)
 
 on:
   pull_request_target:

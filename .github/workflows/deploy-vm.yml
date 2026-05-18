@@ -1,0 +1,24 @@
+name: Deploy to VM
+
+on:
+  push:
+    branches: [master]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to VM
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VM_HOST }}
+          username: ${{ secrets.VM_USER }}
+          key: ${{ secrets.VM_SSH_KEY }}
+          script: |
+            cd /opt/survev
+            git pull origin master
+            pnpm install --filter client --filter shared --filter server
+            pnpm build
+            sudo chown -R www-data:www-data /opt/survev/client/dist
+            sudo systemctl restart survev-game
+            sudo systemctl restart survev-api
